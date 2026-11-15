@@ -38,6 +38,8 @@ The website is hosted on Vercel. Apps Script is used only as a private Sheets ba
    - `STAYBOARD_API_KEY`: the same secret stored in Apps Script Script properties.
 4. Deploy the site to Vercel and add the desired custom domain there. Vercel installs the server dependency in [`package.json`](./package.json) for the `/api/data` function.
 
+After a successful Google sign-in, `/api/auth` sets a signed, `HttpOnly`, `Secure`, same-site cookie that lasts seven days. The browser does not store or resend the Google token for normal data requests; the cookie is device/browser-specific. The existing `STAYBOARD_API_KEY` is used only server-side to sign the cookie, so no additional environment variable is needed. Returning visits check the cookie before loading Google Identity Services.
+
 Setting `ALLOWED_EMAILS` to `*` means any verified Google account can read and modify all shared hotel and guest data, including saved Drive document links. This is not a public anonymous endpoint, but it does not restrict which Google accounts may use it; for guest privacy, an explicit email allowlist is safer. Authorized users sign in on the website; they do not need direct Sheet Editor access because Apps Script writes as the spreadsheet owner. Grant them access to any Drive documents separately. The app uses revision checking to prevent an older page from overwriting newer shared data; reload if another user has saved first. Local `index.html` preview remains browser-local and does not sync.
 
 ## Storage and privacy

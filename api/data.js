@@ -1,56 +1,21 @@
-const { OAuth2Client } = require("google-auth-library");
-
-const googleClient = new OAuth2Client();
-
-function sendJson(res, status, value) {
-  res.status(status).setHeader("Cache-Control", "no-store").json(value);
-}
-
-async function authorizeRequest(req) {
-  const authorization = req.headers.authorization || "";
-  const match = authorization.match(/^Bearer\s+(.+)$/i);
-  if (!match) return { error: "Sign in with Google to continue.", status: 401 };
-
-  let ticket;
-  try {
-    ticket = await googleClient.verifyIdToken({
-      idToken: match[1],
-      audience: process.env.GOOGLE_CLIENT_ID
-    });
-  } catch (error) {
-    console.warn("Google sign-in token was rejected.", error);
-    return { error: "Google sign-in expired or could not be verified. Sign in again.", status: 401 };
-  }
-  const payload = ticket.getPayload();
-  const allowedEmailsSetting = (process.env.ALLOWED_EMAILS || "").trim();
-  const allowAllGoogleAccounts = allowedEmailsSetting === "*";
-  const allowedEmails = allowedEmailsSetting
-    .split(",")
-    .map((email) => email.trim().toLowerCase())
-    .filter(Boolean);
-
-  if (!payload?.email_verified ||
-      (!allowAllGoogleAccounts && !allowedEmails.includes((payload.email || "").toLowerCase()))) {
-    return { error: "This Google account is not authorized to use Stayboard.", status: 403 };
-  }
-  return {};
-}
+const { readSession, sameOrigin, sendJson } = require("../lib/session");
 
 module.exports = async function handler(req, res) {
   if (req.method !== "GET" && req.method !== "POST") {
     res.setHeader("Allow", "GET, POST");
     return sendJson(res, 405, { ok: false, error: "Method not allowed." });
   }
+  if (req.method === "POST" && !sameOrigin(req)) {
+    return sendJson(res, 403, { ok: false, error: "Request origin was not accepted." });
+  }
 
   if (!process.env.GOOGLE_CLIENT_ID || !process.env.ALLOWED_EMAILS ||
       !process.env.APPS_SCRIPT_URL || !process.env.STAYBOARD_API_KEY) {
     return sendJson(res, 503, { ok: false, error: "The shared-data service is not configured." });
   }
-
   try {
-    const authorization = await authorizeRequest(req);
-    if (authorization.error) {
-      return sendJson(res, authorization.status, { ok: false, error: authorization.error });
+    if (!readSession(req)) {
+      return sendJson(res, 401, { ok: false, error: "Your session expired. Sign in again." });
     }
 
     const request = req.method === "GET"

@@ -16,7 +16,6 @@ const state = {
   overviewTab: "all",
   searchQuery: "",
   collapsedHotels: new Set(),
-  authToken: "",
   toastTimer: null
 };
 
@@ -138,7 +137,6 @@ async function fetchSharedData(body) {
   const response = await fetch("/api/data", {
     method: body ? "POST" : "GET",
     headers: {
-      Authorization: `Bearer ${state.authToken}`,
       ...(body ? { "Content-Type": "application/json" } : {})
     },
     ...(body ? { body: JSON.stringify(body) } : {})
@@ -150,9 +148,8 @@ async function fetchSharedData(body) {
     throw new Error("The shared-data service returned an invalid response.");
   }
   if (response.status === 401 && isCloudApp) {
-    state.authToken = "";
     byId("startup-overlay")?.classList.remove("hidden");
-    initializeSharedData();
+    showSignIn("Your 7-day session expired. Sign in again.");
   }
   if (!response.ok || !result.ok) {
     throw new Error(result.message || result.error || `Shared-data request failed (${response.status}).`);
@@ -170,6 +167,28 @@ async function initializeSharedData() {
     return;
   }
 
+  byId("startup-title").textContent = "Checking your session…";
+  byId("startup-error").textContent = "";
+  try {
+    const response = await fetch("/api/auth", { cache: "no-store" });
+    if (response.ok) {
+      await loadSharedData();
+      return;
+    }
+    if (response.status !== 401) {
+      const result = await response.json();
+      throw new Error(result.error || "Could not check your Stayboard session.");
+    }
+    showSignIn();
+  } catch (error) {
+    console.error("Could not check the Stayboard session.", error);
+    byId("startup-title").textContent = "Could not connect";
+    byId("startup-error").textContent = error.message || "Check your connection and try again.";
+    byId("startup-retry")?.classList.remove("hidden");
+  }
+}
+
+function showSignIn(message = "Sign in once; this browser will stay signed in for 7 days.") {
   if (!window.google?.accounts?.id) {
     byId("startup-title").textContent = "Google sign-in is unavailable";
     byId("startup-error").textContent = "Check your internet connection and reload the page.";
@@ -178,11 +197,12 @@ async function initializeSharedData() {
   }
 
   byId("startup-title").textContent = "Sign in to Stayboard";
-  byId("startup-error").textContent = "Use an authorized Google account to access shared hotel data.";
+  byId("startup-error").textContent = message;
   byId("google-signin-button").replaceChildren();
   google.accounts.id.initialize({
     client_id: window.STAYBOARD_CONFIG.googleClientId,
-    callback: handleGoogleCredential
+    callback: handleGoogleCredential,
+    use_fedcm_for_button: true
   });
   google.accounts.id.renderButton(byId("google-signin-button"), {
     theme: "outline",
@@ -192,8 +212,25 @@ async function initializeSharedData() {
 }
 
 async function handleGoogleCredential(credentialResponse) {
-  state.authToken = credentialResponse.credential;
   byId("startup-error").textContent = "Loading shared hotel data…";
+  try {
+    const response = await fetch("/api/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential: credentialResponse.credential })
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || "Google sign-in could not be completed.");
+    }
+    await loadSharedData();
+  } catch (error) {
+    console.error("Could not sign in to shared hotel data.", error);
+    byId("startup-error").textContent = error.message || "Could not sign in.";
+  }
+}
+
+async function loadSharedData() {
   try {
     const response = await fetchSharedData();
     if (!response.ok || !response.data) {
@@ -211,7 +248,7 @@ async function handleGoogleCredential(credentialResponse) {
     const message = byId("startup-error");
     if (message) {
       message.textContent = error.message || "Could not load shared hotel data.";
-      byId("startup-retry")?.classList.remove("hidden");
+      if (!state.backendReady) byId("startup-retry")?.classList.remove("hidden");
     }
   }
 }
@@ -755,8 +792,7 @@ byId("data-info-button").addEventListener("click", () => {
 byId("startup-retry")?.addEventListener("click", () => {
   byId("startup-error").textContent = "";
   byId("startup-retry").classList.add("hidden");
-  if (state.authToken) handleGoogleCredential({ credential: state.authToken });
-  else initializeSharedData();
+  initializeSharedData();
 });
 byId("all-rooms-tab").addEventListener("click", () => {
   state.overviewTab = "all";
