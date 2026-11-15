@@ -8,7 +8,7 @@ Open `index.html` in a modern desktop browser to preview the app. No package ins
 
 The hotels are **Krati Resort**, **Jass Grand**, and **Maantra**. Use **Bulk add rooms** in the navigation to paste room numbers (one per line or comma-separated); existing numbers are skipped. You can also add a room individually.
 
-The overview has **All rooms** and **Today** views, plus guest search. A guest group can have an ordered itinerary with different rooms or hotels for each date range. Add another itinerary segment whenever the group changes rooms or hotels; the app checks room conflicts and date order.
+The overview has **All rooms** and **Today** views, plus guest search. Select an occupied or upcoming room (or a search result) to view the guest and itinerary details; use **Edit stay** to change them. Google Drive links open in Drive in a new tab rather than downloading through Stayboard. A guest group can have an ordered itinerary with different rooms or hotels for each date range. Add another itinerary segment whenever the group changes rooms or hotels; the app checks room conflicts and date order.
 
 The dashboard statistics show totals across all hotels in Overview and only the selected hotel's counts in a hotel view. Date fields use the browser's native date picker.
 
@@ -44,7 +44,7 @@ Setting `ALLOWED_EMAILS` to `*` means any verified Google account can read and m
 
 The Apps Script backend reads and writes booking details and Google Drive links in the shared Google Sheet. The Vercel API checks Google sign-in and either the configured allowlist or the `*` all-Google-accounts setting before forwarding requests. The standalone local preview keeps data in that browser's local storage and does not sync. The app does not upload documents: upload each file to Google Drive yourself, then paste its HTTPS Drive or Docs link into the stay. The Drive file's own sharing permissions control who can open it. For sensitive identity documents, keep sharing restricted to the intended accounts.
 
-The room status **Extra** is a manual label for a special or additional room. Existing attachments saved by an older version remain downloadable from stay details.
+The room status **Extra** is a manual label for a special or additional room. Older browser-stored attachments without a Google Drive URL cannot be opened from the app; add a Drive link to the stay to view the document there.
 
 ## Information needed to finish setup
 

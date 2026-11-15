@@ -129,6 +129,17 @@ h2 { margin: 0; font: 700 17px system-ui, sans-serif; letter-spacing: -.25px; }
 .search-itinerary { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
 .search-itinerary li { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; padding: 7px 9px; border-radius: 6px; background: #f7f8f6; font-size: 10px; }
 .search-itinerary li span { color: #777980; }
+.stay-detail-summary { display: grid; gap: 10px; margin: 0; }
+.stay-detail-summary > div { display: grid; grid-template-columns: 105px 1fr; gap: 10px; padding-bottom: 9px; border-bottom: 1px solid #f0f0ed; }
+.stay-detail-summary dt, .stay-detail-segment span { color: #85868b; font-size: 11px; }
+.stay-detail-summary dd { margin: 0; color: #34363b; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.stay-detail-itinerary, .stay-detail-document { margin-top: 20px; }
+.stay-detail-itinerary h3, .stay-detail-document h3 { margin: 0 0 9px; color: #515359; font-size: 12px; }
+.stay-detail-itinerary ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.stay-detail-segment { display: grid; gap: 7px; padding: 12px; border: 1px solid #e9ebe6; border-radius: 8px; background: #fbfcfa; }
+.stay-detail-segment > strong { color: #34363b; font-size: 12px; }
+.stay-detail-segment span b { color: #55575c; font-weight: 600; }
+.stay-detail-document .button { width: 100%; }
 .stay-segments { display: grid; gap: 10px; }
 .itinerary-segment { display: grid; gap: 10px; padding: 12px; border: 1px solid #e9ebe6; border-radius: 8px; background: #fbfcfa; }
 .itinerary-segment-header { display: flex; align-items: center; justify-content: space-between; color: #515359; font-size: 11px; }

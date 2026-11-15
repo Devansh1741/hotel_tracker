@@ -1,6 +1,4 @@
 const STORAGE_KEY = "stayboard-data-v1";
-const DB_NAME = "stayboard-documents";
-const DB_VERSION = 1;
 const DEFAULT_HOTELS = [
   { id: "hotel-1", name: "Krati Resort" },
   { id: "hotel-2", name: "Jass Grand" },
@@ -18,7 +16,6 @@ const state = {
   overviewTab: "all",
   searchQuery: "",
   collapsedHotels: new Set(),
-  currentDocumentId: "",
   authToken: "",
   toastTimer: null
 };
@@ -217,31 +214,6 @@ async function handleGoogleCredential(credentialResponse) {
       byId("startup-retry")?.classList.remove("hidden");
     }
   }
-}
-
-function openDocumentDB() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains("documents")) {
-        request.result.createObjectStore("documents", { keyPath: "id" });
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error("Could not open document storage."));
-  });
-}
-
-async function getDocument(id) {
-  const db = await openDocumentDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction("documents", "readonly");
-    const request = transaction.objectStore("documents").get(id);
-    request.onsuccess = () => resolve(request.result || null);
-    request.onerror = () => reject(request.error || new Error("Could not read the document."));
-    transaction.oncomplete = () => db.close();
-    transaction.onerror = () => { db.close(); reject(transaction.error || new Error("Could not read the document.")); };
-  });
 }
 
 function makeId(prefix) {
@@ -479,19 +451,19 @@ function renderHotels() {
   hotelContent.querySelectorAll("[data-room]").forEach((button) => {
     button.addEventListener("click", () => {
       if (button.dataset.stayId) {
-        openStayDialog("", button.dataset.stayId);
+        openStayDetails(button.dataset.stayId);
       } else {
         const room = roomById(button.dataset.room);
         const upcoming = roomAssignments().find((entry) =>
           entry.roomId === room.id && localDateTime(entry.checkInDate, entry.checkInTime) > new Date()
         );
-        if (upcoming) openStayDialog("", upcoming.stayId);
+        if (upcoming) openStayDetails(upcoming.stayId);
         else openStayDialog(room.id);
       }
     });
   });
-  hotelContent.querySelectorAll("[data-edit-stay]").forEach((button) => {
-    button.addEventListener("click", () => openStayDialog("", button.dataset.editStay));
+  hotelContent.querySelectorAll("[data-view-stay]").forEach((button) => {
+    button.addEventListener("click", () => openStayDetails(button.dataset.viewStay));
   });
 }
 
@@ -536,7 +508,7 @@ function renderSearchResults(query) {
         <span>${formatDate(segment.checkInDate)} – ${formatDate(segment.checkOutDate)}</span></li>`;
     }).join("");
     return `<article class="search-result">
-      <button class="search-result-main" type="button" data-edit-stay="${escapeHtml(stay.id)}">
+      <button class="search-result-main" type="button" data-view-stay="${escapeHtml(stay.id)}">
         <span class="search-result-heading"><strong>${escapeHtml(stay.headGuest)}</strong><span>${Number(stay.guestCount)} ${Number(stay.guestCount) === 1 ? "person" : "people"}</span></span>
         <span class="search-result-guests">${escapeHtml(guestNames.join(", "))}</span>
         <ul class="search-itinerary">${itinerary}</ul>
@@ -545,8 +517,8 @@ function renderSearchResults(query) {
     </article>`;
   }).join("");
 
-  hotelContent.querySelectorAll("[data-edit-stay]").forEach((button) => {
-    button.addEventListener("click", () => openStayDialog("", button.dataset.editStay));
+  hotelContent.querySelectorAll("[data-view-stay]").forEach((button) => {
+    button.addEventListener("click", () => openStayDetails(button.dataset.viewStay));
   });
 }
 
@@ -572,6 +544,42 @@ function renderRoom(room, assignmentOverride = null) {
       <span class="room-card-footer"><span>${formatDate(stay.checkInDate)} – ${formatDate(stay.checkOutDate)}</span>${stay.documentId || stay.documentUrl ? '<span class="document-mark" aria-label="Guest document linked">▧ Doc</span>' : ""}</span>`
       : `<span class="room-guest" style="color:#85878b;font-weight:500">${isNotOpen ? "Not available yet" : "Ready for a stay"}</span><span class="room-meta">${isNotOpen ? `Available from ${formatDate(room.availableFrom)}` : room.isExtra ? "Special / additional room" : "No current guests"}</span>`}
   </button>`;
+}
+
+function openStayDetails(stayId) {
+  const stay = state.data.stays.find((entry) => entry.id === stayId);
+  if (!stay) return;
+  const guestNames = (stay.otherGuests || "").split(/[,;\n]/).map((name) => name.trim()).filter(Boolean);
+  const itinerary = segmentsForStay(stay).map((segment) => {
+    const room = roomById(segment.roomId);
+    const hotel = hotelById(room?.hotelId);
+    return `<li class="stay-detail-segment">
+      <strong>${escapeHtml(hotel?.name || "Hotel")} · Room ${escapeHtml(room?.roomNumber || "?")}</strong>
+      <span><b>Check-in</b> ${formatDate(segment.checkInDate)}${segment.checkInTime ? ` at ${escapeHtml(segment.checkInTime)}` : ""}</span>
+      <span><b>Check-out</b> ${formatDate(segment.checkOutDate)}${segment.checkOutTime ? ` at ${escapeHtml(segment.checkOutTime)}` : ""}</span>
+    </li>`;
+  }).join("");
+  const documentLink = stay.documentUrl
+    ? `<a class="button button-secondary" href="${escapeHtml(stay.documentUrl)}" target="_blank" rel="noopener noreferrer">Open document in Google Drive ↗</a>`
+    : stay.documentId
+      ? `<p class="file-hint">An older browser-stored attachment has no Google Drive link.</p>`
+      : "";
+
+  byId("stay-detail-title").textContent = stay.headGuest;
+  byId("stay-detail-content").innerHTML = `
+    <dl class="stay-detail-summary">
+      <div><dt>Head guest</dt><dd>${escapeHtml(stay.headGuest)}</dd></div>
+      <div><dt>Group size</dt><dd>${Number(stay.guestCount)} ${Number(stay.guestCount) === 1 ? "person" : "people"}</dd></div>
+      ${guestNames.length ? `<div><dt>Other guests</dt><dd>${escapeHtml(guestNames.join(", "))}</dd></div>` : ""}
+    </dl>
+    <section class="stay-detail-itinerary">
+      <h3>Room itinerary</h3>
+      <ul>${itinerary || "<li>No room itinerary recorded.</li>"}</ul>
+    </section>
+    ${documentLink ? `<section class="stay-detail-document"><h3>Guest document</h3>${documentLink}</section>` : ""}
+  `;
+  byId("edit-stay-detail").dataset.stayId = stay.id;
+  byId("stay-detail-dialog").showModal();
 }
 
 function showToast(message) {
@@ -691,8 +699,6 @@ function openStayDialog(roomId, stayId = "") {
   byId("open-document-link").classList.add("hidden");
   byId("open-document-link").removeAttribute("href");
   form.elements.documentUrl.value = "";
-  byId("download-document-button").classList.add("hidden");
-  state.currentDocumentId = "";
   byId("delete-stay-button").classList.add("hidden");
   const stay = stayId && state.data.stays.find((entry) => entry.id === stayId);
   if (stay) {
@@ -710,10 +716,8 @@ function openStayDialog(roomId, stayId = "") {
     }
     if (stay.documentId) {
       byId("existing-document-hint").textContent += stay.documentName
-        ? ` Older browser-stored document: ${stay.documentName}.`
-        : " An older browser-stored document is attached.";
-      state.currentDocumentId = stay.documentId;
-      byId("download-document-button").classList.remove("hidden");
+        ? ` Older browser-stored document: ${stay.documentName}; no Drive link is saved.`
+        : " An older browser-stored document has no Drive link.";
     }
     byId("delete-stay-button").classList.remove("hidden");
   } else {
@@ -1006,38 +1010,10 @@ byId("delete-stay-button").addEventListener("click", async () => {
   showToast("Stay removed.");
 });
 
-byId("download-document-button").addEventListener("click", async () => {
-  if (!state.currentDocumentId) return;
-  const isAppleMobile = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-  const previewWindow = isAppleMobile ? window.open("about:blank", "_blank") : null;
-  if (isAppleMobile && !previewWindow) {
-    showToast("Allow pop-ups to open the document, then use Share to save it.");
-    return;
-  }
-  try {
-    const storedDocument = await getDocument(state.currentDocumentId);
-    if (!storedDocument) throw new Error("The document is missing from this browser.");
-    const url = URL.createObjectURL(storedDocument.blob);
-    if (previewWindow) {
-      previewWindow.location.href = url;
-      showToast("Document opened. Use Share to save it to Files.");
-    } else {
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = storedDocument.name;
-      link.hidden = true;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      showToast("Document download started.");
-    }
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
-  } catch (error) {
-    previewWindow?.close();
-    console.error("Could not download guest document.", error);
-    showToast("Could not download this document from browser storage.");
-  }
+byId("edit-stay-detail").addEventListener("click", (event) => {
+  const stayId = event.currentTarget.dataset.stayId;
+  byId("stay-detail-dialog").close();
+  openStayDialog("", stayId);
 });
 
 document.querySelectorAll(".close-dialog").forEach((button) => {
