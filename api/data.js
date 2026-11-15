@@ -22,12 +22,15 @@ async function authorizeRequest(req) {
     return { error: "Google sign-in expired or could not be verified. Sign in again.", status: 401 };
   }
   const payload = ticket.getPayload();
-  const allowedEmails = (process.env.ALLOWED_EMAILS || "")
+  const allowedEmailsSetting = (process.env.ALLOWED_EMAILS || "").trim();
+  const allowAllGoogleAccounts = allowedEmailsSetting === "*";
+  const allowedEmails = allowedEmailsSetting
     .split(",")
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean);
 
-  if (!payload?.email_verified || !allowedEmails.includes((payload.email || "").toLowerCase())) {
+  if (!payload?.email_verified ||
+      (!allowAllGoogleAccounts && !allowedEmails.includes((payload.email || "").toLowerCase()))) {
     return { error: "This Google account is not authorized to use Stayboard.", status: 403 };
   }
   return {};

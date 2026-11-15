@@ -33,16 +33,16 @@ The website is hosted on Vercel. Apps Script is used only as a private Sheets ba
 2. Add the client ID to [`config.js`](./config.js). Set the same ID as Vercel's `GOOGLE_CLIENT_ID` environment variable.
 3. Set these Vercel environment variables:
    - `GOOGLE_CLIENT_ID`: the Web OAuth client ID.
-   - `ALLOWED_EMAILS`: comma-separated Google account email addresses permitted to use the app.
+   - `ALLOWED_EMAILS`: set to `*` to allow any Google account with a verified email, or use comma-separated email addresses to restrict access.
    - `APPS_SCRIPT_URL`: the deployed Apps Script `/exec` URL.
    - `STAYBOARD_API_KEY`: the same secret stored in Apps Script Script properties.
 4. Deploy the site to Vercel and add the desired custom domain there. Vercel installs the server dependency in [`package.json`](./package.json) for the `/api/data` function.
 
-Authorized users sign in on the website; they do not need direct Sheet Editor access because Apps Script writes as the spreadsheet owner. Grant them access to any Drive documents separately. The app uses revision checking to prevent an older page from overwriting newer shared data; reload if another user has saved first. Local `index.html` preview remains browser-local and does not sync.
+Setting `ALLOWED_EMAILS` to `*` means any verified Google account can read and modify all shared hotel and guest data, including saved Drive document links. This is not a public anonymous endpoint, but it does not restrict which Google accounts may use it; for guest privacy, an explicit email allowlist is safer. Authorized users sign in on the website; they do not need direct Sheet Editor access because Apps Script writes as the spreadsheet owner. Grant them access to any Drive documents separately. The app uses revision checking to prevent an older page from overwriting newer shared data; reload if another user has saved first. Local `index.html` preview remains browser-local and does not sync.
 
 ## Storage and privacy
 
-The Apps Script backend reads and writes booking details and Google Drive links in the shared Google Sheet. The Vercel API checks Google sign-in and the allowlist before forwarding requests. The standalone local preview keeps data in that browser's local storage and does not sync. The app does not upload documents: upload each file to Google Drive yourself, then paste its HTTPS Drive or Docs link into the stay. The Drive file's own sharing permissions control who can open it. For sensitive identity documents, keep sharing restricted to the intended accounts.
+The Apps Script backend reads and writes booking details and Google Drive links in the shared Google Sheet. The Vercel API checks Google sign-in and either the configured allowlist or the `*` all-Google-accounts setting before forwarding requests. The standalone local preview keeps data in that browser's local storage and does not sync. The app does not upload documents: upload each file to Google Drive yourself, then paste its HTTPS Drive or Docs link into the stay. The Drive file's own sharing permissions control who can open it. For sensitive identity documents, keep sharing restricted to the intended accounts.
 
 The room status **Extra** is a manual label for a special or additional room. Existing attachments saved by an older version remain downloadable from stay details.
 
