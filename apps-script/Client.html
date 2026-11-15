@@ -1,0 +1,975 @@
+﻿<script>
+const STORAGE_KEY = "stayboard-data-v1";
+const DB_NAME = "stayboard-documents";
+const DB_VERSION = 1;
+const DEFAULT_HOTELS = [
+  { id: "hotel-1", name: "Krati Resort" },
+  { id: "hotel-2", name: "Jass Grand" },
+  { id: "hotel-3", name: "Maantra" }
+];
+const DEFAULT_ROOM_NUMBERS = Array.from({ length: 10 }, (_, index) => String(101 + index));
+const ROOM_INVENTORY_PLAN = {
+  "hotel-1": { "101-110": "2026-11-20" },
+  "hotel-2": { "101-106": "2026-11-19", "107-114": "2026-11-20" },
+  "hotel-3": { "101-120": "2026-11-19" }
+};
+
+const state = {
+  data: loadData(),
+  persistedData: null,
+  backendRevision: "",
+  backendReady: false,
+  selectedHotel: "all",
+  currentPage: "overview",
+  overviewTab: "all",
+  searchQuery: "",
+  currentDocumentId: "",
+  toastTimer: null
+};
+
+const byId = (id) => document.getElementById(id);
+const hotelNav = byId("hotel-nav");
+const hotelContent = byId("hotel-content");
+const stayDialog = byId("stay-dialog");
+const roomDialog = byId("room-dialog");
+const hotelDialog = byId("hotel-dialog");
+const isAppsScriptApp = typeof google !== "undefined" && Boolean(google.script?.run);
+
+function loadData() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (!saved) {
+      const data = { hotels: structuredClone(DEFAULT_HOTELS), rooms: [], stays: [] };
+      data.rooms = createDefaultRooms(data.hotels);
+      return data;
+    }
+    const parsed = JSON.parse(saved);
+    if (!Array.isArray(parsed.hotels) || !Array.isArray(parsed.rooms) || !Array.isArray(parsed.stays)) {
+      throw new Error("Saved hotel data has an unexpected format.");
+    }
+    let hotelsRenamed = false;
+    parsed.hotels = parsed.hotels.map((hotel) => {
+      const defaultHotel = DEFAULT_HOTELS.find((entry) => entry.id === hotel.id);
+      if (!defaultHotel || !/^Hotel \d+$/.test(hotel.name)) return hotel;
+      hotelsRenamed = true;
+      return { ...hotel, name: defaultHotel.name };
+    });
+    const inventoryUpdated = applyDefaultInventoryPlan(parsed);
+    if (hotelsRenamed || inventoryUpdated) localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+    return parsed;
+  } catch (error) {
+    console.error("Could not load saved hotel data.", error);
+    return { hotels: structuredClone(DEFAULT_HOTELS), rooms: [], stays: [] };
+  }
+}
+
+function createDefaultRooms(hotels) {
+  return hotels.flatMap((hotel) => {
+    const plan = Object.entries(ROOM_INVENTORY_PLAN[hotel.id] || {});
+    if (!plan.length) {
+      return DEFAULT_ROOM_NUMBERS.map((roomNumber) => ({
+        id: makeId("room"), hotelId: hotel.id, roomNumber, isExtra: false
+      }));
+    }
+    return plan.flatMap(([range, availableFrom]) => {
+      const [first, last] = range.split("-").map(Number);
+      return Array.from({ length: last - first + 1 }, (_, index) => ({
+        id: makeId("room"),
+        hotelId: hotel.id,
+        roomNumber: String(first + index),
+        isExtra: false,
+        availableFrom
+      }));
+    });
+  });
+}
+
+function applyDefaultInventoryPlan(data) {
+  let changed = false;
+  for (const hotel of data.hotels) {
+    const plan = Object.entries(ROOM_INVENTORY_PLAN[hotel.id] || {});
+    if (!plan.length) continue;
+    for (const [range, availableFrom] of plan) {
+      const [first, last] = range.split("-").map(Number);
+      for (let roomNumber = first; roomNumber <= last; roomNumber += 1) {
+        let room = data.rooms.find((entry) =>
+          entry.hotelId === hotel.id && entry.roomNumber.toLowerCase() === String(roomNumber)
+        );
+        if (!room) {
+          room = { id: makeId("room"), hotelId: hotel.id, roomNumber: String(roomNumber), isExtra: false };
+          data.rooms.push(room);
+          changed = true;
+        }
+        const hasEarlierBooking = data.stays.some((stay) =>
+          segmentsForStay(stay).some((segment) => segment.roomId === room.id && segment.checkInDate < availableFrom)
+        );
+        if (!room.availableFrom && !hasEarlierBooking) {
+          room.availableFrom = availableFrom;
+          changed = true;
+        }
+      }
+    }
+  }
+  return changed;
+}
+
+async function saveData() {
+  if (isAppsScriptApp) {
+    try {
+      const response = await callAppsScript("saveStayboardData", {
+        action: "save",
+        revision: state.backendRevision,
+        data: state.data
+      });
+      if (!response.ok) {
+        if (response.error === "STALE_DATA") {
+          throw new Error("Someone else has changed the shared data. Reload the page before trying again.");
+        }
+        throw new Error(response.message || response.error || "Could not save shared data.");
+      }
+      state.backendRevision = response.revision;
+      state.persistedData = structuredClone(state.data);
+      return true;
+    } catch (error) {
+      if (state.persistedData) state.data = structuredClone(state.persistedData);
+      render();
+      console.error("Could not save shared hotel data.", error);
+      showToast(error.message || "Could not save shared data.");
+      return false;
+    }
+  }
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data));
+  } catch (error) {
+    console.error("Could not save hotel data.", error);
+    showToast("Could not save changes in this browser. Check available storage.");
+    return false;
+  }
+  return true;
+}
+
+function callAppsScript(functionName, ...args) {
+  return new Promise((resolve, reject) => {
+    google.script.run
+      .withSuccessHandler(resolve)
+      .withFailureHandler(reject)[functionName](...args);
+  });
+}
+
+async function initializeAppsScriptData() {
+  const overlay = byId("startup-overlay");
+  if (!isAppsScriptApp) {
+    state.backendReady = true;
+    overlay?.classList.add("hidden");
+    byId("footer-message").textContent = "Not shared yet: bookings and links stay in this browser; Drive files stay in Drive.";
+    render();
+    return;
+  }
+  try {
+    const response = await callAppsScript("getStayboardData");
+    if (!response.ok || !response.data) {
+      throw new Error(response.error || "The shared hotel data could not be loaded.");
+    }
+    state.data = response.data;
+    state.persistedData = structuredClone(response.data);
+    state.backendRevision = response.revision;
+    state.backendReady = true;
+    byId("footer-message").textContent = "Shared data syncs through your Google Sheet; Drive files stay in Drive.";
+    overlay?.classList.add("hidden");
+    render();
+  } catch (error) {
+    console.error("Could not load shared hotel data.", error);
+    const message = byId("startup-error");
+    if (message) {
+      message.textContent = `${error.message || "Could not load shared hotel data."} Check that setup has completed and that this Google account can edit the Sheet.`;
+      byId("startup-retry")?.classList.remove("hidden");
+    }
+  }
+}
+
+function openDocumentDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains("documents")) {
+        request.result.createObjectStore("documents", { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Could not open document storage."));
+  });
+}
+
+async function getDocument(id) {
+  const db = await openDocumentDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction("documents", "readonly");
+    const request = transaction.objectStore("documents").get(id);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error || new Error("Could not read the document."));
+    transaction.oncomplete = () => db.close();
+    transaction.onerror = () => { db.close(); reject(transaction.error || new Error("Could not read the document.")); };
+  });
+}
+
+function makeId(prefix) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[char]);
+}
+
+function hotelById(id) {
+  return state.data.hotels.find((hotel) => hotel.id === id);
+}
+
+function roomById(id) {
+  return state.data.rooms.find((room) => room.id === id);
+}
+
+function localDateTime(date, time) {
+  return new Date(`${date}T${time || "00:00"}:00`);
+}
+
+function addDateDays(date, days) {
+  const result = new Date(`${date}T12:00:00`);
+  result.setDate(result.getDate() + days);
+  return dateKey(result);
+}
+
+function segmentsForStay(stay) {
+  if (Array.isArray(stay.segments)) return stay.segments;
+  if (!stay.roomId) return [];
+  return [{
+    roomId: stay.roomId,
+    checkInDate: stay.checkInDate,
+    checkInTime: stay.checkInTime,
+    checkOutDate: stay.checkOutDate,
+    checkOutTime: stay.checkOutTime
+  }];
+}
+
+function roomAssignments() {
+  return state.data.stays.flatMap((stay) =>
+    segmentsForStay(stay).map((segment) => ({ ...stay, ...segment, stayId: stay.id }))
+  );
+}
+
+function currentStay(roomId, now = new Date()) {
+  return roomAssignments().find((assignment) =>
+    assignment.roomId === roomId &&
+    localDateTime(assignment.checkInDate, assignment.checkInTime) <= now &&
+    localDateTime(assignment.checkOutDate, assignment.checkOutTime) > now
+  );
+}
+
+function roomAvailableOn(room, date) {
+  return !room.availableFrom || room.availableFrom <= date;
+}
+
+function formatDate(date) {
+  if (!date) return "";
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(`${date}T12:00:00`));
+}
+
+function render() {
+  renderNav();
+  renderDashboard();
+  renderHotels();
+  renderPage();
+}
+
+function renderNav() {
+  const allActive = state.selectedHotel === "all";
+  hotelNav.innerHTML = `
+    <button class="nav-item ${allActive && state.currentPage === "overview" ? "active" : ""}" type="button" data-hotel="all">
+      <span class="nav-symbol">âŒ‚</span><span>Overview</span>
+    </button>
+    ${state.data.hotels.map((hotel, index) => {
+      const count = state.data.rooms.filter((room) => room.hotelId === hotel.id).length;
+      return `<button class="nav-item ${state.selectedHotel === hotel.id && state.currentPage === "overview" ? "active" : ""}" type="button" data-hotel="${escapeHtml(hotel.id)}">
+        <span class="nav-symbol">${["âŒ‚", "âŒ‘", "âŒ‚"][index % 3]}</span><span>${escapeHtml(hotel.name)}</span><span class="nav-room-count">${count}</span>
+      </button>`;
+    }).join("")}
+    <button class="nav-item ${state.currentPage === "bulk" ? "active" : ""}" type="button" data-page="bulk">
+      <span class="nav-symbol">ï¼‹</span><span>Bulk add rooms</span>
+    </button>`;
+  hotelNav.querySelectorAll("[data-hotel]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedHotel = button.dataset.hotel;
+      state.currentPage = "overview";
+      render();
+    });
+  });
+  hotelNav.querySelector("[data-page='bulk']").addEventListener("click", () => {
+    state.currentPage = "bulk";
+    render();
+  });
+}
+
+function renderDashboard() {
+  const rooms = state.data.rooms;
+  const now = new Date();
+  const activeRooms = rooms.filter((room) => roomAvailableOn(room, dateKey(now)));
+  const occupied = rooms.map((room) => ({ room, stay: currentStay(room.id, now) })).filter((item) => item.stay);
+  const arrivals = roomAssignments().filter((assignment) => assignment.checkInDate === dateKey(now));
+  byId("stat-rooms").innerHTML = `${rooms.length} <span>rooms</span>`;
+  byId("stat-available").textContent = `${Math.max(0, activeRooms.length - occupied.length)} available today`;
+  byId("stat-occupied").innerHTML = `${occupied.length} <span>rooms</span>`;
+  byId("stat-guests").innerHTML = `${occupied.reduce((total, item) => total + Number(item.stay.guestCount), 0)} <span>people</span>`;
+  byId("stat-arrivals").innerHTML = `${arrivals.length} <span>groups</span>`;
+  byId("hotel-count").textContent = state.data.hotels.length;
+  byId("today-label").textContent = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" }).format(now);
+
+  const selected = state.selectedHotel === "all" ? null : hotelById(state.selectedHotel);
+  byId("page-crumb").textContent = selected ? selected.name : "Overview";
+  byId("heading-eyebrow").textContent = selected ? "HOTEL OVERVIEW" : "YOUR PROPERTIES";
+  byId("page-title").innerHTML = selected ? `${escapeHtml(selected.name)} <span class="wave">âœ¦</span>` : `Good day <span class="wave">âœ¦</span>`;
+  byId("page-subtitle").textContent = selected
+    ? "Manage rooms, stays, and guest details for this hotel."
+    : "Hereâ€™s whatâ€™s happening across your hotels.";
+  byId("rooms-title").textContent = selected ? "Rooms" : "Your hotels";
+  byId("rooms-caption").textContent = selected
+    ? "Select a room to add or update a guest itinerary."
+    : state.overviewTab === "today"
+      ? "Rooms with current guests or arrivals and departures today."
+      : "Select a hotel to view its rooms and guests.";
+  byId("all-rooms-tab").classList.toggle("active", state.overviewTab === "all");
+  byId("today-tab").classList.toggle("active", state.overviewTab === "today");
+  byId("guest-search").value = state.searchQuery;
+}
+
+function renderPage() {
+  const isBulkPage = state.currentPage === "bulk";
+  byId("bulk-page").classList.toggle("hidden", !isBulkPage);
+  byId("stats-grid").classList.toggle("hidden", isBulkPage);
+  byId("rooms-section").classList.toggle("hidden", isBulkPage);
+  byId("add-stay-button").classList.toggle("hidden", isBulkPage);
+  byId("add-room-button").classList.toggle("hidden", isBulkPage);
+  if (isBulkPage) {
+    byId("page-crumb").textContent = "Bulk add rooms";
+    byId("heading-eyebrow").textContent = "PROPERTY SETUP";
+    byId("page-title").textContent = "Add rooms in bulk";
+    byId("page-subtitle").textContent = "Set up multiple room numbers at once.";
+    const select = byId("bulk-hotel-select");
+    const selectedHotelId = state.selectedHotel !== "all" ? state.selectedHotel : select.value;
+    select.innerHTML = state.data.hotels.map((hotel) =>
+      `<option value="${escapeHtml(hotel.id)}">${escapeHtml(hotel.name)}</option>`
+    ).join("");
+    if (hotelById(selectedHotelId)) select.value = selectedHotelId;
+  }
+}
+
+function dateKey(date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
+}
+
+function renderHotels() {
+  const query = state.searchQuery.trim().toLocaleLowerCase();
+  if (query) {
+    renderSearchResults(query);
+    return;
+  }
+
+  const hotels = state.selectedHotel === "all"
+    ? state.data.hotels
+    : state.data.hotels.filter((hotel) => hotel.id === state.selectedHotel);
+  const today = dateKey(new Date());
+  const visibleHotels = hotels.map((hotel) => {
+    const hotelRooms = state.data.rooms.filter((room) => room.hotelId === hotel.id);
+    const rooms = state.overviewTab === "today"
+      ? hotelRooms.filter((room) => todayAssignment(room.id, today))
+      : hotelRooms;
+    return { hotel, rooms, totalRooms: hotelRooms.length };
+  }).filter(({ rooms }) => state.overviewTab !== "today" || rooms.length);
+
+  if (visibleHotels.length === 0 && state.overviewTab === "today") {
+    hotelContent.innerHTML = `<div class="empty-state"><strong>Nothing scheduled for today</strong>No current guests or check-ins/check-outs for ${escapeHtml(
+      new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric" }).format(new Date())
+    )}.</div>`;
+    return;
+  }
+
+  hotelContent.innerHTML = visibleHotels.map(({ hotel, rooms, totalRooms }) => {
+    rooms.sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
+    return `<article class="hotel-panel">
+      <header class="hotel-panel-header">
+        <div class="hotel-title">
+          <span class="hotel-monogram">${escapeHtml(hotel.name.slice(0, 1).toUpperCase())}</span>
+          <div><h3>${escapeHtml(hotel.name)}</h3><p>${state.overviewTab === "today"
+            ? `${rooms.length} active today Â· ${totalRooms} total`
+            : `${rooms.length} ${rooms.length === 1 ? "room" : "rooms"}`}</p></div>
+        </div>
+        <div>
+          <button class="text-button" type="button" data-rename-hotel="${escapeHtml(hotel.id)}">Rename</button>
+          <button class="text-button" type="button" data-add-room="${escapeHtml(hotel.id)}">+ Add room</button>
+        </div>
+      </header>
+      ${rooms.length ? `<div class="room-grid">${rooms.map((room) => {
+        const assignment = state.overviewTab === "today" ? todayAssignment(room.id, today) : null;
+        return renderRoom(room, assignment);
+      }).join("")}</div>` : `
+        <div class="empty-hotel"><div><strong>No rooms added yet</strong><p>Add your first room number to get started.</p></div>
+          <button class="button button-secondary" type="button" data-add-room="${escapeHtml(hotel.id)}">+ Add a room</button></div>`}
+    </article>`;
+  }).join("");
+
+  hotelContent.querySelectorAll("[data-add-room]").forEach((button) => {
+    button.addEventListener("click", () => openRoomDialog(button.dataset.addRoom));
+  });
+  hotelContent.querySelectorAll("[data-rename-hotel]").forEach((button) => {
+    button.addEventListener("click", () => openHotelDialog(button.dataset.renameHotel));
+  });
+  hotelContent.querySelectorAll("[data-room]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (button.dataset.stayId) {
+        openStayDialog("", button.dataset.stayId);
+      } else {
+        const room = roomById(button.dataset.room);
+        const upcoming = roomAssignments().find((entry) =>
+          entry.roomId === room.id && localDateTime(entry.checkInDate, entry.checkInTime) > new Date()
+        );
+        if (upcoming) openStayDialog("", upcoming.stayId);
+        else openStayDialog(room.id);
+      }
+    });
+  });
+  hotelContent.querySelectorAll("[data-edit-stay]").forEach((button) => {
+    button.addEventListener("click", () => openStayDialog("", button.dataset.editStay));
+  });
+}
+
+function todayAssignment(roomId, today = dateKey(new Date())) {
+  const room = roomById(roomId);
+  if (!room || !roomAvailableOn(room, today)) return null;
+  const now = new Date();
+  const assignments = roomAssignments().filter((assignment) => assignment.roomId === roomId);
+  return assignments.find((assignment) =>
+    localDateTime(assignment.checkInDate, assignment.checkInTime) <= now &&
+    localDateTime(assignment.checkOutDate, assignment.checkOutTime) > now
+  ) || assignments
+    .filter((assignment) =>
+      assignment.checkInDate === today &&
+      localDateTime(assignment.checkInDate, assignment.checkInTime) > now
+    )
+    .sort((a, b) => localDateTime(a.checkInDate, a.checkInTime) - localDateTime(b.checkInDate, b.checkInTime))[0] ||
+    assignments.find((assignment) => assignment.checkOutDate === today);
+}
+
+function renderSearchResults(query) {
+  const matches = state.data.stays.filter((stay) => {
+    const groupNames = [stay.headGuest, ...(stay.otherGuests || "").split(/[,;\n]/)]
+      .filter(Boolean)
+      .join(" ")
+      .toLocaleLowerCase();
+    return groupNames.includes(query);
+  });
+  if (!matches.length) {
+    hotelContent.innerHTML = `<div class="empty-state"><strong>No guests found</strong>Try another name or part of a name.</div>`;
+    return;
+  }
+
+  hotelContent.innerHTML = matches.map((stay) => {
+    const guestNames = [stay.headGuest, ...(stay.otherGuests || "").split(/[,;\n]/)]
+      .map((name) => name.trim())
+      .filter(Boolean);
+    const itinerary = segmentsForStay(stay).map((segment) => {
+      const room = roomById(segment.roomId);
+      const hotel = hotelById(room?.hotelId);
+      return `<li><strong>${escapeHtml(hotel?.name || "Hotel")} Â· Room ${escapeHtml(room?.roomNumber || "?")}</strong>
+        <span>${formatDate(segment.checkInDate)} â€“ ${formatDate(segment.checkOutDate)}</span></li>`;
+    }).join("");
+    return `<article class="search-result">
+      <button class="search-result-main" type="button" data-edit-stay="${escapeHtml(stay.id)}">
+        <span class="search-result-heading"><strong>${escapeHtml(stay.headGuest)}</strong><span>${Number(stay.guestCount)} ${Number(stay.guestCount) === 1 ? "person" : "people"}</span></span>
+        <span class="search-result-guests">${escapeHtml(guestNames.join(", "))}</span>
+        <ul class="search-itinerary">${itinerary}</ul>
+        ${stay.documentUrl ? '<span class="document-mark">â–§ Drive document</span>' : ""}
+      </button>
+    </article>`;
+  }).join("");
+
+  hotelContent.querySelectorAll("[data-edit-stay]").forEach((button) => {
+    button.addEventListener("click", () => openStayDialog("", button.dataset.editStay));
+  });
+}
+
+function renderRoom(room, assignmentOverride = null) {
+  const hotel = hotelById(room.hotelId);
+  const activeStay = currentStay(room.id);
+  const stay = assignmentOverride || activeStay || roomAssignments()
+    .filter((entry) => entry.roomId === room.id && localDateTime(entry.checkInDate, entry.checkInTime) > new Date())
+    .sort((a, b) => localDateTime(a.checkInDate, a.checkInTime) - localDateTime(b.checkInDate, b.checkInTime))[0];
+  const isUpcoming = Boolean(stay && !assignmentOverride && !activeStay);
+  const today = dateKey(new Date());
+  const isTodayArrival = Boolean(assignmentOverride && !activeStay && assignmentOverride.checkInDate === today);
+  const isNotOpen = !stay && !roomAvailableOn(room, dateKey(new Date()));
+  const statusLabel = isTodayArrival ? "Arriving today" :
+    assignmentOverride && !activeStay && assignmentOverride.checkOutDate === today ? "Checking out" :
+      activeStay && assignmentOverride?.checkOutDate === today ? "Checks out today" :
+        activeStay ? (room.isExtra ? "Extra Â· occupied" : "Occupied") :
+          isUpcoming ? "Upcoming" : isNotOpen ? `Opens ${formatDate(room.availableFrom)}` : (room.isExtra ? "Extra" : "Available");
+  const classes = ["room-card", activeStay ? "occupied" : "", isUpcoming ? "upcoming" : "", isNotOpen ? "not-open" : "", room.isExtra ? "extra" : ""].filter(Boolean).join(" ");
+  return `<button class="${classes}" type="button" data-room="${escapeHtml(room.id)}" ${stay?.stayId ? `data-stay-id="${escapeHtml(stay.stayId)}"` : ""} aria-label="Room ${escapeHtml(room.roomNumber)} at ${escapeHtml(hotel?.name || "hotel")}: ${stay ? `${escapeHtml(stay.headGuest)}, ${stay.guestCount} people` : statusLabel}">
+    <span class="room-card-top"><span class="room-number">Room ${escapeHtml(room.roomNumber)}</span><span class="room-state">${statusLabel}</span></span>
+    ${stay ? `<span class="room-guest">${escapeHtml(stay.headGuest)}</span><span class="room-meta"><strong>${Number(stay.guestCount)} ${Number(stay.guestCount) === 1 ? "person" : "people"}</strong> ${isUpcoming ? "booked" : isTodayArrival ? "arriving today" : "in this room"}</span>
+      <span class="room-card-footer"><span>${formatDate(stay.checkInDate)} â€“ ${formatDate(stay.checkOutDate)}</span>${stay.documentId || stay.documentUrl ? '<span class="document-mark" aria-label="Guest document linked">â–§ Doc</span>' : ""}</span>`
+      : `<span class="room-guest" style="color:#85878b;font-weight:500">${isNotOpen ? "Not available yet" : "Ready for a stay"}</span><span class="room-meta">${isNotOpen ? `Available from ${formatDate(room.availableFrom)}` : room.isExtra ? "Special / additional room" : "No current guests"}</span>`}
+  </button>`;
+}
+
+function showToast(message) {
+  const toast = byId("toast");
+  toast.textContent = message;
+  toast.classList.add("visible");
+  clearTimeout(state.toastTimer);
+  state.toastTimer = setTimeout(() => toast.classList.remove("visible"), 3200);
+}
+
+function openRoomDialog(hotelId = "") {
+  const form = byId("room-form");
+  form.reset();
+  byId("room-error").textContent = "";
+  const select = form.elements.hotelId;
+  select.innerHTML = state.data.hotels.map((hotel) =>
+    `<option value="${escapeHtml(hotel.id)}">${escapeHtml(hotel.name)}</option>`
+  ).join("");
+  if (hotelId) select.value = hotelId;
+  roomDialog.showModal();
+  form.elements.roomNumber.focus();
+}
+
+function openHotelDialog(hotelId) {
+  const hotel = hotelById(hotelId);
+  if (!hotel) return;
+  const form = byId("hotel-form");
+  byId("hotel-error").textContent = "";
+  form.elements.hotelId.value = hotel.id;
+  form.elements.hotelName.value = hotel.name;
+  hotelDialog.showModal();
+  form.elements.hotelName.focus();
+}
+
+function addItinerarySegment(segment = {}) {
+  const container = byId("stay-segments");
+  const index = container.children.length;
+  const previous = container.lastElementChild;
+  const previousCheckOut = previous?.querySelector('[data-segment-field="checkOutDate"]')?.value;
+  const today = dateKey(new Date());
+  const selectedRoom = roomById(segment.roomId);
+  const defaultCheckInDate = selectedRoom?.availableFrom && selectedRoom.availableFrom > today
+    ? selectedRoom.availableFrom
+    : today;
+  const checkInDate = segment.checkInDate || previousCheckOut || defaultCheckInDate;
+  const checkOutDate = segment.checkOutDate || addDateDays(checkInDate, 1);
+  const checkInTime = segment.checkInTime || (index > 0
+    ? previous?.querySelector('[data-segment-field="checkOutTime"]')?.value || "12:00"
+    : "12:00");
+  const checkOutTime = segment.checkOutTime || "11:00";
+  const roomOptions = state.data.rooms
+    .slice()
+    .sort((a, b) => {
+      const hotelOrder = state.data.hotels.findIndex((hotel) => hotel.id === a.hotelId) -
+        state.data.hotels.findIndex((hotel) => hotel.id === b.hotelId);
+      return hotelOrder || a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true });
+    })
+    .map((room) => `<option value="${escapeHtml(room.id)}">${escapeHtml(hotelById(room.hotelId)?.name || "Hotel")} Â· Room ${escapeHtml(room.roomNumber)}</option>`)
+    .join("");
+  const segmentElement = document.createElement("section");
+  segmentElement.className = "itinerary-segment";
+  segmentElement.dataset.itinerarySegment = "";
+  segmentElement.innerHTML = `
+    <header class="itinerary-segment-header">
+      <strong>Stay ${index + 1}</strong>
+      ${index ? '<button class="text-button remove-segment" type="button">Remove</button>' : ""}
+    </header>
+    <label class="field">Hotel and room
+      <select data-segment-field="roomId" required>${roomOptions}</select>
+    </label>
+    <div class="itinerary-dates">
+      <label class="field">Check-in date<input data-segment-field="checkInDate" type="date" required></label>
+      <label class="field">Time<input data-segment-field="checkInTime" type="time" required></label>
+      <label class="field">Check-out date<input data-segment-field="checkOutDate" type="date" required></label>
+      <label class="field">Time<input data-segment-field="checkOutTime" type="time" required></label>
+    </div>`;
+  segmentElement.querySelector('[data-segment-field="checkInDate"]').value = checkInDate;
+  segmentElement.querySelector('[data-segment-field="checkInTime"]').value = checkInTime;
+  segmentElement.querySelector('[data-segment-field="checkOutDate"]').value = checkOutDate;
+  segmentElement.querySelector('[data-segment-field="checkOutTime"]').value = checkOutTime;
+  if (segment.roomId && roomById(segment.roomId)) {
+    segmentElement.querySelector('[data-segment-field="roomId"]').value = segment.roomId;
+  }
+  container.append(segmentElement);
+}
+
+function setItinerarySegments(segments) {
+  byId("stay-segments").replaceChildren();
+  for (const segment of segments) addItinerarySegment(segment);
+  if (segments.length === 0) addItinerarySegment();
+}
+
+function openStayDialog(roomId, stayId = "") {
+  const form = byId("stay-form");
+  form.reset();
+  setItinerarySegments([]);
+  byId("stay-error").textContent = "";
+  byId("existing-document-hint").textContent = "";
+  byId("open-document-link").classList.add("hidden");
+  byId("open-document-link").removeAttribute("href");
+  form.elements.documentUrl.value = "";
+  byId("download-document-button").classList.add("hidden");
+  state.currentDocumentId = "";
+  byId("delete-stay-button").classList.add("hidden");
+  const stay = stayId && state.data.stays.find((entry) => entry.id === stayId);
+  if (stay) {
+    byId("stay-dialog-title").textContent = "Edit stay";
+    form.elements.stayId.value = stay.id;
+    form.elements.headGuest.value = stay.headGuest;
+    form.elements.guestCount.value = stay.guestCount;
+    form.elements.otherGuests.value = stay.otherGuests || "";
+    setItinerarySegments(segmentsForStay(stay));
+    if (stay.documentUrl) {
+      form.elements.documentUrl.value = stay.documentUrl;
+      byId("existing-document-hint").textContent = "Drive link saved with this stay.";
+      byId("open-document-link").href = stay.documentUrl;
+      byId("open-document-link").classList.remove("hidden");
+    }
+    if (stay.documentId) {
+      byId("existing-document-hint").textContent += stay.documentName
+        ? ` Older browser-stored document: ${stay.documentName}.`
+        : " An older browser-stored document is attached.";
+      state.currentDocumentId = stay.documentId;
+      byId("download-document-button").classList.remove("hidden");
+    }
+    byId("delete-stay-button").classList.remove("hidden");
+  } else {
+    byId("stay-dialog-title").textContent = "Add a stay";
+    form.elements.stayId.value = "";
+    if (roomId) setItinerarySegments([{ roomId }]);
+  }
+  stayDialog.showModal();
+  form.elements.headGuest.focus();
+}
+
+function stayConflict(roomId, checkIn, checkOut, exceptId) {
+  return roomAssignments().find((assignment) => {
+    if (assignment.roomId !== roomId || assignment.stayId === exceptId) return false;
+    const existingStart = localDateTime(assignment.checkInDate, assignment.checkInTime);
+    const existingEnd = localDateTime(assignment.checkOutDate, assignment.checkOutTime);
+    return checkIn < existingEnd && checkOut > existingStart;
+  });
+}
+
+byId("add-stay-button").addEventListener("click", () => {
+  if (state.data.rooms.length === 0) {
+    showToast("Add a room before creating a stay.");
+    openRoomDialog();
+    return;
+  }
+  openStayDialog();
+});
+byId("add-room-button").addEventListener("click", () => openRoomDialog(state.selectedHotel === "all" ? "" : state.selectedHotel));
+byId("data-info-button").addEventListener("click", () => {
+  showToast(isAppsScriptApp
+    ? "Bookings and Drive links are shared through your Google Sheet. Documents stay in your Google Drive."
+    : "Bookings and Drive links are stored only in this browser. Documents stay in your Google Drive.");
+});
+byId("startup-retry")?.addEventListener("click", () => {
+  byId("startup-error").textContent = "";
+  byId("startup-retry").classList.add("hidden");
+  initializeAppsScriptData();
+});
+byId("all-rooms-tab").addEventListener("click", () => {
+  state.overviewTab = "all";
+  renderDashboard();
+  renderHotels();
+});
+byId("today-tab").addEventListener("click", () => {
+  state.overviewTab = "today";
+  renderDashboard();
+  renderHotels();
+});
+byId("guest-search").addEventListener("input", (event) => {
+  state.searchQuery = event.currentTarget.value;
+  renderHotels();
+});
+
+byId("room-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const hotelId = form.elements.hotelId.value;
+  const roomNumber = form.elements.roomNumber.value.trim();
+  const availableFrom = form.elements.availableFrom.value;
+  const error = byId("room-error");
+  if (!roomNumber) {
+    error.textContent = "Enter a room number.";
+    return;
+  }
+  if (state.data.rooms.some((room) => room.hotelId === hotelId && room.roomNumber.toLowerCase() === roomNumber.toLowerCase())) {
+    error.textContent = "That room number already exists at this hotel.";
+    return;
+  }
+  state.data.rooms.push({
+    id: makeId("room"), hotelId, roomNumber, isExtra: form.elements.isExtra.checked,
+    availableFrom
+  });
+  if (!await saveData()) return;
+  roomDialog.close();
+  render();
+  showToast(`Room ${roomNumber} added.`);
+});
+
+byId("add-segment-button").addEventListener("click", () => addItinerarySegment());
+byId("stay-segments").addEventListener("click", (event) => {
+  const removeButton = event.target.closest(".remove-segment");
+  if (!removeButton) return;
+  removeButton.closest("[data-itinerary-segment]").remove();
+  byId("stay-segments").querySelectorAll("[data-itinerary-segment]").forEach((segment, index) => {
+    segment.querySelector(".itinerary-segment-header strong").textContent = `Stay ${index + 1}`;
+    const remove = segment.querySelector(".remove-segment");
+    if (index === 0 && remove) remove.remove();
+    else if (index > 0 && !remove) {
+      const button = document.createElement("button");
+      button.className = "text-button remove-segment";
+      button.type = "button";
+      button.textContent = "Remove";
+      segment.querySelector(".itinerary-segment-header").append(button);
+    }
+  });
+});
+
+function parseRoomNumbers(value) {
+  const roomNumbers = new Map();
+  value.split(/[\n,;]/).map((roomNumber) => roomNumber.trim()).filter(Boolean).forEach((roomNumber) => {
+    const key = roomNumber.toLocaleLowerCase();
+    if (!roomNumbers.has(key)) roomNumbers.set(key, roomNumber);
+  });
+  return [...roomNumbers.values()];
+}
+
+function updateBulkCount() {
+  const count = parseRoomNumbers(byId("bulk-room-numbers").value).length;
+  byId("bulk-count").textContent = `${count} ${count === 1 ? "room number" : "room numbers"} entered`;
+}
+
+byId("bulk-room-numbers").addEventListener("input", updateBulkCount);
+byId("bulk-room-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const hotelId = form.elements.hotelId.value;
+  const availableFrom = form.elements.availableFrom.value;
+  const roomNumbers = parseRoomNumbers(form.elements.roomNumbers.value);
+  const error = byId("bulk-error");
+  const result = byId("bulk-result");
+  error.textContent = "";
+  result.textContent = "";
+
+  if (!hotelById(hotelId)) {
+    error.textContent = "Select a hotel.";
+    return;
+  }
+  if (roomNumbers.length === 0) {
+    error.textContent = "Enter at least one room number.";
+    return;
+  }
+  if (roomNumbers.length > 500) {
+    error.textContent = "Add no more than 500 unique room numbers per batch.";
+    return;
+  }
+
+  const existingRoomNumbers = new Set(state.data.rooms
+    .filter((room) => room.hotelId === hotelId)
+    .map((room) => room.roomNumber.toLowerCase()));
+  const newRoomNumbers = roomNumbers.filter((roomNumber) => !existingRoomNumbers.has(roomNumber.toLowerCase()));
+  const skippedCount = roomNumbers.length - newRoomNumbers.length;
+
+  if (newRoomNumbers.length === 0) {
+    result.textContent = `No new rooms added. All ${roomNumbers.length} room numbers already exist in this hotel.`;
+    return;
+  }
+
+  const addedRooms = newRoomNumbers.map((roomNumber) => ({
+    id: makeId("room"),
+    hotelId,
+    roomNumber,
+    isExtra: false,
+    availableFrom
+  }));
+  state.data.rooms.push(...addedRooms);
+  if (!await saveData()) {
+    const addedIds = new Set(addedRooms.map((room) => room.id));
+    state.data.rooms = state.data.rooms.filter((room) => !addedIds.has(room.id));
+    return;
+  }
+
+  render();
+  const skippedMessage = skippedCount ? ` Skipped ${skippedCount} duplicate ${skippedCount === 1 ? "number" : "numbers"}.` : "";
+  result.textContent = `Added ${addedRooms.length} ${addedRooms.length === 1 ? "room" : "rooms"} to ${hotelById(hotelId).name}.${skippedMessage}`;
+  showToast(`${addedRooms.length} ${addedRooms.length === 1 ? "room" : "rooms"} added.`);
+});
+
+byId("hotel-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const hotel = hotelById(form.elements.hotelId.value);
+  const name = form.elements.hotelName.value.trim();
+  if (!hotel || !name) {
+    byId("hotel-error").textContent = "Enter a hotel name.";
+    return;
+  }
+  hotel.name = name;
+  if (!await saveData()) return;
+  hotelDialog.close();
+  render();
+  showToast("Hotel name updated.");
+});
+
+byId("stay-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const error = byId("stay-error");
+  error.textContent = "";
+  const stayId = form.elements.stayId.value;
+  const segments = [...byId("stay-segments").querySelectorAll("[data-itinerary-segment]")].map((element) => ({
+    roomId: element.querySelector('[data-segment-field="roomId"]').value,
+    checkInDate: element.querySelector('[data-segment-field="checkInDate"]').value,
+    checkInTime: element.querySelector('[data-segment-field="checkInTime"]').value,
+    checkOutDate: element.querySelector('[data-segment-field="checkOutDate"]').value,
+    checkOutTime: element.querySelector('[data-segment-field="checkOutTime"]').value
+  }));
+  if (segments.length === 0) {
+    error.textContent = "Add at least one room to the itinerary.";
+    return;
+  }
+  for (const [index, segment] of segments.entries()) {
+    const assignedRoom = roomById(segment.roomId);
+    if (!assignedRoom) {
+      error.textContent = `Select a hotel and room for Stay ${index + 1}.`;
+      return;
+    }
+    if (!segment.checkInDate || !segment.checkInTime || !segment.checkOutDate || !segment.checkOutTime) {
+      error.textContent = `Complete the dates and times for Stay ${index + 1}.`;
+      return;
+    }
+    const checkIn = localDateTime(segment.checkInDate, segment.checkInTime);
+    const checkOut = localDateTime(segment.checkOutDate, segment.checkOutTime);
+    if (!(checkOut > checkIn)) {
+      error.textContent = `Stay ${index + 1}: check-out must be later than check-in.`;
+      return;
+    }
+    if (!roomAvailableOn(assignedRoom, segment.checkInDate)) {
+      error.textContent = `Stay ${index + 1}: this room does not open until ${formatDate(assignedRoom.availableFrom)}.`;
+      return;
+    }
+    if (stayConflict(segment.roomId, checkIn, checkOut, stayId)) {
+      error.textContent = `Stay ${index + 1}: this room already has a booking during those dates and times.`;
+      return;
+    }
+    if (index > 0) {
+      const previous = segments[index - 1];
+      if (checkIn < localDateTime(previous.checkOutDate, previous.checkOutTime)) {
+        error.textContent = "Put room changes in date order, with no overlapping stays.";
+        return;
+      }
+    }
+  }
+  if (segments.length > 30) {
+    error.textContent = "A guest itinerary can include up to 30 room changes.";
+    return;
+  }
+  const guestCount = Number(form.elements.guestCount.value);
+  if (!Number.isInteger(guestCount) || guestCount < 1 || guestCount > 30) {
+    error.textContent = "Enter a guest count from 1 to 30.";
+    return;
+  }
+  const headGuest = form.elements.headGuest.value.trim();
+  if (!headGuest) {
+    error.textContent = "Enter the head guestâ€™s name.";
+    return;
+  }
+
+  const existing = state.data.stays.find((stay) => stay.id === stayId);
+  const documentId = existing?.documentId || "";
+  const documentName = existing?.documentName || "";
+  const documentUrl = form.elements.documentUrl.value.trim();
+  if (documentUrl) {
+    try {
+      const parsedUrl = new URL(documentUrl);
+      if (parsedUrl.protocol !== "https:" || parsedUrl.username || parsedUrl.password ||
+          !["drive.google.com", "docs.google.com"].includes(parsedUrl.hostname)) {
+        error.textContent = "Enter a secure Google Drive or Google Docs link.";
+        return;
+      }
+    } catch {
+      error.textContent = "Enter a valid Google Drive link.";
+      return;
+    }
+  }
+  state.data.stays = state.data.stays.filter((stay) => stay.id !== stayId);
+  state.data.stays.push({
+    id: stayId || makeId("stay"), headGuest, guestCount,
+    otherGuests: form.elements.otherGuests.value.trim(), segments,
+    documentId, documentName, documentUrl
+  });
+  if (!await saveData()) return;
+  stayDialog.close();
+  render();
+  showToast(documentUrl ? "Stay and Drive link saved." : "Stay saved.");
+});
+
+byId("delete-stay-button").addEventListener("click", async () => {
+  const stayId = byId("stay-form").elements.stayId.value;
+  if (!stayId) return;
+  state.data.stays = state.data.stays.filter((stay) => stay.id !== stayId);
+  if (!await saveData()) return;
+  stayDialog.close();
+  render();
+  initializeAppsScriptData();
+  showToast("Stay removed.");
+});
+
+byId("download-document-button").addEventListener("click", async () => {
+  if (!state.currentDocumentId) return;
+  const isAppleMobile = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const previewWindow = isAppleMobile ? window.open("about:blank", "_blank") : null;
+  if (isAppleMobile && !previewWindow) {
+    showToast("Allow pop-ups to open the document, then use Share to save it.");
+    return;
+  }
+  try {
+    const storedDocument = await getDocument(state.currentDocumentId);
+    if (!storedDocument) throw new Error("The document is missing from this browser.");
+    const url = URL.createObjectURL(storedDocument.blob);
+    if (previewWindow) {
+      previewWindow.location.href = url;
+      showToast("Document opened. Use Share to save it to Files.");
+    } else {
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = storedDocument.name;
+      link.hidden = true;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      showToast("Document download started.");
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (error) {
+    previewWindow?.close();
+    console.error("Could not download guest document.", error);
+    showToast("Could not download this document from browser storage.");
+  }
+});
+
+document.querySelectorAll(".close-dialog").forEach((button) => {
+  button.addEventListener("click", () => button.closest("dialog").close());
+});
+
+render();
+
+</script>

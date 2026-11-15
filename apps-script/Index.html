@@ -1,0 +1,226 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f6f7f4">
+    <title>Stayboard â€” Hotel tracker</title>
+    <?!= include("Styles"); ?>
+  </head>
+  <body>
+    <div class="startup-overlay" id="startup-overlay" role="status" aria-live="polite">
+      <div class="startup-card">
+        <strong>Connecting to shared hotel dataâ€¦</strong>
+        <p id="startup-error"></p>
+        <button class="button button-primary hidden" id="startup-retry" type="button">Try again</button>
+      </div>
+    </div>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <a class="brand" href="#" aria-label="Stayboard home">
+          <span class="brand-mark">s</span>
+          <span>stayboard</span>
+        </a>
+        <div class="side-label">WORKSPACE</div>
+        <nav class="hotel-nav" id="hotel-nav" aria-label="Hotel navigation"></nav>
+        <div class="sidebar-note">
+          <span class="note-icon">i</span>
+          <p>Your hotel overview, all in one place.</p>
+        </div>
+        <div class="profile">
+          <div class="avatar">Y</div>
+          <div><strong>Your workspace</strong><span>Personal account</span></div>
+          <span class="profile-dots">Â·Â·Â·</span>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div class="breadcrumbs"><span>Workspace</span><span class="crumb-slash">/</span><strong id="page-crumb">Overview</strong></div>
+          <div class="top-actions">
+            <span class="today-label" id="today-label"></span>
+            <button class="button button-primary" id="add-stay-button" type="button"><span class="button-plus">+</span> Add a stay</button>
+          </div>
+        </header>
+
+        <section class="page-heading">
+          <div>
+            <p class="eyebrow" id="heading-eyebrow">YOUR PROPERTIES</p>
+            <h1 id="page-title">Good day <span class="wave">âœ¦</span></h1>
+            <p class="subheading" id="page-subtitle">Hereâ€™s whatâ€™s happening across your hotels.</p>
+          </div>
+          <button class="button button-secondary" id="add-room-button" type="button"><span class="button-plus">+</span> Add a room</button>
+        </section>
+
+        <section class="stats-grid" id="stats-grid" aria-label="Hotel summary">
+          <article class="stat-card">
+            <div class="stat-top"><span class="stat-icon icon-lilac">â–¦</span><span class="stat-caption">ACROSS ALL HOTELS</span></div>
+            <div class="stat-value" id="stat-rooms">0 <span>rooms</span></div>
+            <div class="stat-foot"><span class="dot dot-green"></span><span id="stat-available">0 available</span></div>
+          </article>
+          <article class="stat-card">
+            <div class="stat-top"><span class="stat-icon icon-peach">â—‰</span><span class="stat-caption">RIGHT NOW</span></div>
+            <div class="stat-value" id="stat-occupied">0 <span>rooms</span></div>
+            <div class="stat-foot"><span class="dot dot-peach"></span><span>Currently occupied</span></div>
+          </article>
+          <article class="stat-card">
+            <div class="stat-top"><span class="stat-icon icon-blue">â™§</span><span class="stat-caption">GUESTS IN-HOUSE</span></div>
+            <div class="stat-value" id="stat-guests">0 <span>people</span></div>
+            <div class="stat-foot"><span class="dot dot-blue"></span><span>Across all properties</span></div>
+          </article>
+          <article class="stat-card">
+            <div class="stat-top"><span class="stat-icon icon-yellow">â†—</span><span class="stat-caption">CHECKING IN TODAY</span></div>
+            <div class="stat-value" id="stat-arrivals">0 <span>groups</span></div>
+            <div class="stat-foot"><span class="dot dot-yellow"></span><span>Expected arrivals</span></div>
+          </article>
+        </section>
+
+        <section class="rooms-section" id="rooms-section">
+          <div class="section-heading">
+            <div>
+              <div class="title-row"><h2 id="rooms-title">Your hotels</h2><span class="count-pill" id="hotel-count">3</span></div>
+              <p id="rooms-caption">Select a hotel to view its rooms and guests.</p>
+            </div>
+            <div class="overview-controls">
+              <div class="overview-tabs" role="group" aria-label="Overview period">
+                <button class="overview-tab active" id="all-rooms-tab" type="button">All rooms</button>
+                <button class="overview-tab" id="today-tab" type="button">Today</button>
+              </div>
+              <label class="search-field">
+                <span aria-hidden="true">âŒ•</span>
+                <input id="guest-search" type="search" placeholder="Search any guest name" autocomplete="off">
+              </label>
+            </div>
+            <div class="legend" aria-label="Room status legend">
+              <span><i class="legend-dot available"></i>Available</span>
+              <span><i class="legend-dot occupied"></i>Occupied</span>
+              <span><i class="legend-dot extra"></i>Extra</span>
+              <span><i class="legend-dot not-open"></i>Opens later</span>
+            </div>
+          </div>
+          <div id="hotel-content" class="hotel-content"></div>
+        </section>
+
+        <section class="bulk-page hidden" id="bulk-page">
+          <div class="bulk-card">
+            <p class="eyebrow">ROOM SETUP</p>
+            <h2>Add multiple rooms</h2>
+            <p class="bulk-description">Choose a hotel, then paste or type room numbers. Put one room number on each line, or separate them with commas.</p>
+            <form id="bulk-room-form">
+              <label class="field">Hotel
+                <select name="hotelId" id="bulk-hotel-select" required></select>
+              </label>
+              <label class="field bulk-room-field">Room numbers
+                <textarea name="roomNumbers" id="bulk-room-numbers" rows="8" placeholder="101&#10;102&#10;103" required></textarea>
+                <span class="bulk-helper">Duplicates already in this hotel will be skipped. Up to 500 room numbers per batch.</span>
+              </label>
+              <label class="field bulk-date-field">Available from <span class="optional">(optional)</span>
+                <input name="availableFrom" type="date">
+              </label>
+              <div class="bulk-footer">
+                <span class="bulk-count" id="bulk-count">0 room numbers entered</span>
+                <button class="button button-primary" type="submit"><span class="button-plus">+</span> Add rooms</button>
+              </div>
+              <div class="form-error" id="bulk-error" role="alert"></div>
+              <div class="bulk-result" id="bulk-result" role="status" aria-live="polite"></div>
+            </form>
+          </div>
+        </section>
+
+        <footer class="footer-note"><span class="shield">â—‡</span> <span id="footer-message">Not shared yet: bookings and links stay in this browser; Drive files stay in Drive.</span> <button id="data-info-button" type="button">Learn more</button></footer>
+      </main>
+    </div>
+
+    <dialog class="app-dialog" id="stay-dialog">
+      <form id="stay-form">
+        <div class="dialog-heading">
+          <div><p class="eyebrow">GUEST BOOKING</p><h2 id="stay-dialog-title">Add a stay</h2></div>
+          <button class="icon-button close-dialog" type="button" aria-label="Close">Ã—</button>
+        </div>
+        <input type="hidden" name="stayId">
+        <div class="form-grid">
+          <label class="field full-field">Head guestâ€™s name
+            <input name="headGuest" type="text" placeholder="e.g. Priya Sharma" required maxlength="100">
+          </label>
+          <label class="field">Number of people
+            <input name="guestCount" type="number" min="1" max="30" value="1" required>
+          </label>
+          <label class="field">Other guest names <span class="optional">(optional)</span>
+            <input name="otherGuests" type="text" placeholder="e.g. Amit, Neha">
+          </label>
+          <div class="field full-field">
+            <span>Room itinerary</span>
+            <span class="file-hint">Add a segment for each room/hotel change. Set the dates for each segment in order.</span>
+            <div id="stay-segments" class="stay-segments"></div>
+            <button class="button button-secondary add-segment-button" id="add-segment-button" type="button">+ Add another room / hotel</button>
+          </div>
+          <label class="field full-field">Google Drive document link <span class="optional">(optional)</span>
+            <input name="documentUrl" type="url" inputmode="url" placeholder="https://drive.google.com/file/d/â€¦" autocomplete="url" maxlength="2048">
+            <span class="file-hint">Paste a link to a file youâ€™ve already uploaded. The app saves the link, not the file. Check Drive sharing settings so the right people can open it.</span>
+          </label>
+          <span class="file-hint full-field" id="existing-document-hint"></span>
+          <a class="text-button full-field hidden" id="open-document-link" href="#" target="_blank" rel="noopener noreferrer">Open document in Google Drive</a>
+          <button class="text-button full-field hidden" id="download-document-button" type="button">Download attached document</button>
+        </div>
+        <div class="form-error" id="stay-error" role="alert"></div>
+        <div class="dialog-actions">
+          <button class="button button-danger-text hidden" id="delete-stay-button" type="button">Remove stay</button>
+          <span class="action-spacer"></span>
+          <button class="button button-secondary close-dialog" type="button">Cancel</button>
+          <button class="button button-primary" type="submit">Save stay</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="app-dialog compact-dialog" id="room-dialog">
+      <form id="room-form">
+        <div class="dialog-heading">
+          <div><p class="eyebrow">PROPERTY SETUP</p><h2>Add a room</h2></div>
+          <button class="icon-button close-dialog" type="button" aria-label="Close">Ã—</button>
+        </div>
+        <div class="form-grid">
+          <label class="field full-field">Hotel
+            <select name="hotelId" required></select>
+          </label>
+          <label class="field full-field">Room number
+            <input name="roomNumber" type="text" placeholder="e.g. 101 or A-2" required maxlength="20">
+          </label>
+          <label class="field full-field">Available from <span class="optional">(optional)</span>
+            <input name="availableFrom" type="date">
+          </label>
+          <label class="checkbox-field full-field"><input name="isExtra" type="checkbox"> Mark as an extra room</label>
+        </div>
+        <p class="form-help">Room numbers must be unique within each hotel. â€œExtraâ€ is a manual label for a special or additional room.</p>
+        <div class="form-error" id="room-error" role="alert"></div>
+        <div class="dialog-actions">
+          <span class="action-spacer"></span>
+          <button class="button button-secondary close-dialog" type="button">Cancel</button>
+          <button class="button button-primary" type="submit">Add room</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="app-dialog compact-dialog" id="hotel-dialog">
+      <form id="hotel-form">
+        <div class="dialog-heading">
+          <div><p class="eyebrow">PROPERTY DETAILS</p><h2>Rename hotel</h2></div>
+          <button class="icon-button close-dialog" type="button" aria-label="Close">Ã—</button>
+        </div>
+        <input type="hidden" name="hotelId">
+        <label class="field full-field">Hotel name
+          <input name="hotelName" type="text" required maxlength="60" placeholder="e.g. Lakeside Residency">
+        </label>
+        <div class="form-error" id="hotel-error" role="alert"></div>
+        <div class="dialog-actions">
+          <span class="action-spacer"></span>
+          <button class="button button-secondary close-dialog" type="button">Cancel</button>
+          <button class="button button-primary" type="submit">Save name</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <?!= include("Client"); ?>
+  </body>
+</html>
+
