@@ -6,12 +6,7 @@ const DEFAULT_HOTELS = [
   { id: "hotel-2", name: "Jass Grand" },
   { id: "hotel-3", name: "Maantra" }
 ];
-const DEFAULT_ROOM_NUMBERS = Array.from({ length: 10 }, (_, index) => String(101 + index));
-const ROOM_INVENTORY_PLAN = {
-  "hotel-1": { "101-110": "2026-11-20" },
-  "hotel-2": { "101-106": "2026-11-19", "107-114": "2026-11-20" },
-  "hotel-3": { "101-120": "2026-11-19" }
-};
+const DEFAULT_ROOM_NUMBERS = ["1", "2", "3"];
 
 const state = {
   data: loadData(),
@@ -22,7 +17,9 @@ const state = {
   currentPage: "overview",
   overviewTab: "all",
   searchQuery: "",
+  collapsedHotels: new Set(),
   currentDocumentId: "",
+  authToken: "",
   toastTimer: null
 };
 
@@ -32,7 +29,7 @@ const hotelContent = byId("hotel-content");
 const stayDialog = byId("stay-dialog");
 const roomDialog = byId("room-dialog");
 const hotelDialog = byId("hotel-dialog");
-const isAppsScriptApp = typeof google !== "undefined" && Boolean(google.script?.run);
+const isCloudApp = Boolean(window.STAYBOARD_CONFIG?.googleClientId);
 
 function loadData() {
   try {
@@ -63,49 +60,42 @@ function loadData() {
 }
 
 function createDefaultRooms(hotels) {
-  return hotels.flatMap((hotel) => {
-    const plan = Object.entries(ROOM_INVENTORY_PLAN[hotel.id] || {});
-    if (!plan.length) {
-      return DEFAULT_ROOM_NUMBERS.map((roomNumber) => ({
-        id: makeId("room"), hotelId: hotel.id, roomNumber, isExtra: false
-      }));
-    }
-    return plan.flatMap(([range, availableFrom]) => {
-      const [first, last] = range.split("-").map(Number);
-      return Array.from({ length: last - first + 1 }, (_, index) => ({
-        id: makeId("room"),
-        hotelId: hotel.id,
-        roomNumber: String(first + index),
-        isExtra: false,
-        availableFrom
-      }));
-    });
-  });
+  return hotels.flatMap((hotel) => DEFAULT_ROOM_NUMBERS.map((roomNumber) => ({
+    id: makeId("room"), hotelId: hotel.id, roomNumber, isExtra: false
+  })));
 }
 
 function applyDefaultInventoryPlan(data) {
   let changed = false;
   for (const hotel of data.hotels) {
-    const plan = Object.entries(ROOM_INVENTORY_PLAN[hotel.id] || {});
-    if (!plan.length) continue;
-    for (const [range, availableFrom] of plan) {
-      const [first, last] = range.split("-").map(Number);
-      for (let roomNumber = first; roomNumber <= last; roomNumber += 1) {
-        let room = data.rooms.find((entry) =>
-          entry.hotelId === hotel.id && entry.roomNumber.toLowerCase() === String(roomNumber)
-        );
-        if (!room) {
-          room = { id: makeId("room"), hotelId: hotel.id, roomNumber: String(roomNumber), isExtra: false };
-          data.rooms.push(room);
-          changed = true;
-        }
-        const hasEarlierBooking = data.stays.some((stay) =>
-          segmentsForStay(stay).some((segment) => segment.roomId === room.id && segment.checkInDate < availableFrom)
-        );
-        if (!room.availableFrom && !hasEarlierBooking) {
-          room.availableFrom = availableFrom;
-          changed = true;
-        }
+    const currentHotelRooms = data.rooms.filter((room) => room.hotelId === hotel.id);
+    const hasBookings = data.stays.some((stay) =>
+      segmentsForStay(stay).some((segment) =>
+        currentHotelRooms.some((room) => room.id === segment.roomId)
+      )
+    );
+    if (hasBookings) continue;
+
+    const desiredNumbers = new Set(DEFAULT_ROOM_NUMBERS);
+    const desiredRooms = currentHotelRooms.filter((room) => desiredNumbers.has(room.roomNumber));
+    if (currentHotelRooms.length !== desiredRooms.length ||
+        desiredRooms.some((room) => room.availableFrom)) {
+      data.rooms = data.rooms.filter((room) => room.hotelId !== hotel.id || desiredNumbers.has(room.roomNumber));
+      for (const room of data.rooms.filter((entry) => entry.hotelId === hotel.id)) {
+        delete room.availableFrom;
+      }
+      changed = true;
+    }
+
+    for (const roomNumber of DEFAULT_ROOM_NUMBERS) {
+      if (!data.rooms.some((room) => room.hotelId === hotel.id && room.roomNumber === roomNumber)) {
+        data.rooms.push({
+          id: makeId("room"),
+          hotelId: hotel.id,
+          roomNumber,
+          isExtra: false
+        });
+        changed = true;
       }
     }
   }
@@ -113,9 +103,9 @@ function applyDefaultInventoryPlan(data) {
 }
 
 async function saveData() {
-  if (isAppsScriptApp) {
+  if (isCloudApp) {
     try {
-      const response = await callAppsScript("saveStayboardData", {
+      const response = await fetchSharedData({
         action: "save",
         revision: state.backendRevision,
         data: state.data
@@ -147,25 +137,68 @@ async function saveData() {
   return true;
 }
 
-function callAppsScript(functionName, ...args) {
-  return new Promise((resolve, reject) => {
-    google.script.run
-      .withSuccessHandler(resolve)
-      .withFailureHandler(reject)[functionName](...args);
+async function fetchSharedData(body) {
+  const response = await fetch("/api/data", {
+    method: body ? "POST" : "GET",
+    headers: {
+      Authorization: `Bearer ${state.authToken}`,
+      ...(body ? { "Content-Type": "application/json" } : {})
+    },
+    ...(body ? { body: JSON.stringify(body) } : {})
   });
+  let result;
+  try {
+    result = await response.json();
+  } catch (error) {
+    throw new Error("The shared-data service returned an invalid response.");
+  }
+  if (response.status === 401 && isCloudApp) {
+    state.authToken = "";
+    byId("startup-overlay")?.classList.remove("hidden");
+    initializeSharedData();
+  }
+  if (!response.ok || !result.ok) {
+    throw new Error(result.message || result.error || `Shared-data request failed (${response.status}).`);
+  }
+  return result;
 }
 
-async function initializeAppsScriptData() {
+async function initializeSharedData() {
   const overlay = byId("startup-overlay");
-  if (!isAppsScriptApp) {
+  if (!isCloudApp) {
     state.backendReady = true;
     overlay?.classList.add("hidden");
     byId("footer-message").textContent = "Not shared yet: bookings and links stay in this browser; Drive files stay in Drive.";
     render();
     return;
   }
+
+  if (!window.google?.accounts?.id) {
+    byId("startup-title").textContent = "Google sign-in is unavailable";
+    byId("startup-error").textContent = "Check your internet connection and reload the page.";
+    byId("startup-retry")?.classList.remove("hidden");
+    return;
+  }
+
+  byId("startup-title").textContent = "Sign in to Stayboard";
+  byId("startup-error").textContent = "Use an authorized Google account to access shared hotel data.";
+  byId("google-signin-button").replaceChildren();
+  google.accounts.id.initialize({
+    client_id: window.STAYBOARD_CONFIG.googleClientId,
+    callback: handleGoogleCredential
+  });
+  google.accounts.id.renderButton(byId("google-signin-button"), {
+    theme: "outline",
+    size: "large",
+    text: "signin_with"
+  });
+}
+
+async function handleGoogleCredential(credentialResponse) {
+  state.authToken = credentialResponse.credential;
+  byId("startup-error").textContent = "Loading shared hotel data…";
   try {
-    const response = await callAppsScript("getStayboardData");
+    const response = await fetchSharedData();
     if (!response.ok || !response.data) {
       throw new Error(response.error || "The shared hotel data could not be loaded.");
     }
@@ -174,13 +207,13 @@ async function initializeAppsScriptData() {
     state.backendRevision = response.revision;
     state.backendReady = true;
     byId("footer-message").textContent = "Shared data syncs through your Google Sheet; Drive files stay in Drive.";
-    overlay?.classList.add("hidden");
+    byId("startup-overlay")?.classList.add("hidden");
     render();
   } catch (error) {
     console.error("Could not load shared hotel data.", error);
     const message = byId("startup-error");
     if (message) {
-      message.textContent = `${error.message || "Could not load shared hotel data."} Check that setup has completed and that this Google account can edit the Sheet.`;
+      message.textContent = error.message || "Could not load shared hotel data.";
       byId("startup-retry")?.classList.remove("hidden");
     }
   }
@@ -310,11 +343,18 @@ function renderNav() {
 }
 
 function renderDashboard() {
-  const rooms = state.data.rooms;
+  const selected = state.selectedHotel === "all" ? null : hotelById(state.selectedHotel);
+  const rooms = selected
+    ? state.data.rooms.filter((room) => room.hotelId === selected.id)
+    : state.data.rooms;
   const now = new Date();
   const activeRooms = rooms.filter((room) => roomAvailableOn(room, dateKey(now)));
   const occupied = rooms.map((room) => ({ room, stay: currentStay(room.id, now) })).filter((item) => item.stay);
-  const arrivals = roomAssignments().filter((assignment) => assignment.checkInDate === dateKey(now));
+  const arrivals = roomAssignments().filter((assignment) =>
+    assignment.checkInDate === dateKey(now) &&
+    rooms.some((room) => room.id === assignment.roomId)
+  );
+  byId("rooms-stat-caption").textContent = selected ? selected.name.toLocaleUpperCase() : "ACROSS ALL HOTELS";
   byId("stat-rooms").innerHTML = `${rooms.length} <span>rooms</span>`;
   byId("stat-available").textContent = `${Math.max(0, activeRooms.length - occupied.length)} available today`;
   byId("stat-occupied").innerHTML = `${occupied.length} <span>rooms</span>`;
@@ -323,7 +363,6 @@ function renderDashboard() {
   byId("hotel-count").textContent = state.data.hotels.length;
   byId("today-label").textContent = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" }).format(now);
 
-  const selected = state.selectedHotel === "all" ? null : hotelById(state.selectedHotel);
   byId("page-crumb").textContent = selected ? selected.name : "Overview";
   byId("heading-eyebrow").textContent = selected ? "HOTEL OVERVIEW" : "YOUR PROPERTIES";
   byId("page-title").innerHTML = selected ? `${escapeHtml(selected.name)} <span class="wave">✦</span>` : `Good day <span class="wave">✦</span>`;
@@ -395,6 +434,8 @@ function renderHotels() {
 
   hotelContent.innerHTML = visibleHotels.map(({ hotel, rooms, totalRooms }) => {
     rooms.sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
+    const collapsed = state.collapsedHotels.has(hotel.id);
+    const panelId = `hotel-rooms-${hotel.id}`;
     return `<article class="hotel-panel">
       <header class="hotel-panel-header">
         <div class="hotel-title">
@@ -403,20 +444,32 @@ function renderHotels() {
             ? `${rooms.length} active today · ${totalRooms} total`
             : `${rooms.length} ${rooms.length === 1 ? "room" : "rooms"}`}</p></div>
         </div>
-        <div>
+        <div class="hotel-panel-actions">
+          <button class="text-button hotel-collapse" type="button" data-toggle-hotel="${escapeHtml(hotel.id)}"
+            aria-expanded="${!collapsed}" aria-controls="${escapeHtml(panelId)}">${collapsed ? "Expand" : "Collapse"}</button>
           <button class="text-button" type="button" data-rename-hotel="${escapeHtml(hotel.id)}">Rename</button>
           <button class="text-button" type="button" data-add-room="${escapeHtml(hotel.id)}">+ Add room</button>
         </div>
       </header>
-      ${rooms.length ? `<div class="room-grid">${rooms.map((room) => {
-        const assignment = state.overviewTab === "today" ? todayAssignment(room.id, today) : null;
-        return renderRoom(room, assignment);
-      }).join("")}</div>` : `
-        <div class="empty-hotel"><div><strong>No rooms added yet</strong><p>Add your first room number to get started.</p></div>
-          <button class="button button-secondary" type="button" data-add-room="${escapeHtml(hotel.id)}">+ Add a room</button></div>`}
+      <div class="hotel-panel-content ${collapsed ? "hidden" : ""}" id="${escapeHtml(panelId)}">
+        ${rooms.length ? `<div class="room-grid">${rooms.map((room) => {
+          const assignment = state.overviewTab === "today" ? todayAssignment(room.id, today) : null;
+          return renderRoom(room, assignment);
+        }).join("")}</div>` : `
+          <div class="empty-hotel"><div><strong>No rooms added yet</strong><p>Add your first room number to get started.</p></div>
+            <button class="button button-secondary" type="button" data-add-room="${escapeHtml(hotel.id)}">+ Add a room</button></div>`}
+      </div>
     </article>`;
   }).join("");
 
+  hotelContent.querySelectorAll("[data-toggle-hotel]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const hotelId = button.dataset.toggleHotel;
+      if (state.collapsedHotels.has(hotelId)) state.collapsedHotels.delete(hotelId);
+      else state.collapsedHotels.add(hotelId);
+      renderHotels();
+    });
+  });
   hotelContent.querySelectorAll("[data-add-room]").forEach((button) => {
     button.addEventListener("click", () => openRoomDialog(button.dataset.addRoom));
   });
@@ -560,6 +613,8 @@ function addItinerarySegment(segment = {}) {
   const previousCheckOut = previous?.querySelector('[data-segment-field="checkOutDate"]')?.value;
   const today = dateKey(new Date());
   const selectedRoom = roomById(segment.roomId);
+  const selectedHotelId = selectedRoom?.hotelId || segment.hotelId ||
+    (state.selectedHotel !== "all" ? state.selectedHotel : state.data.hotels[0]?.id || "");
   const defaultCheckInDate = selectedRoom?.availableFrom && selectedRoom.availableFrom > today
     ? selectedRoom.availableFrom
     : today;
@@ -569,14 +624,8 @@ function addItinerarySegment(segment = {}) {
     ? previous?.querySelector('[data-segment-field="checkOutTime"]')?.value || "12:00"
     : "12:00");
   const checkOutTime = segment.checkOutTime || "11:00";
-  const roomOptions = state.data.rooms
-    .slice()
-    .sort((a, b) => {
-      const hotelOrder = state.data.hotels.findIndex((hotel) => hotel.id === a.hotelId) -
-        state.data.hotels.findIndex((hotel) => hotel.id === b.hotelId);
-      return hotelOrder || a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true });
-    })
-    .map((room) => `<option value="${escapeHtml(room.id)}">${escapeHtml(hotelById(room.hotelId)?.name || "Hotel")} · Room ${escapeHtml(room.roomNumber)}</option>`)
+  const hotelOptions = state.data.hotels
+    .map((hotel) => `<option value="${escapeHtml(hotel.id)}">${escapeHtml(hotel.name)}</option>`)
     .join("");
   const segmentElement = document.createElement("section");
   segmentElement.className = "itinerary-segment";
@@ -586,23 +635,45 @@ function addItinerarySegment(segment = {}) {
       <strong>Stay ${index + 1}</strong>
       ${index ? '<button class="text-button remove-segment" type="button">Remove</button>' : ""}
     </header>
-    <label class="field">Hotel and room
-      <select data-segment-field="roomId" required>${roomOptions}</select>
-    </label>
+    <div class="itinerary-room-selection">
+      <label class="field">Hotel
+        <select data-segment-field="hotelId" required>${hotelOptions}</select>
+      </label>
+      <label class="field">Room
+        <select data-segment-field="roomId" required></select>
+      </label>
+    </div>
     <div class="itinerary-dates">
-      <label class="field">Check-in date<input data-segment-field="checkInDate" type="date" required></label>
+      <label class="field">Check-in date
+        <input data-segment-field="checkInDate" type="date" required>
+      </label>
       <label class="field">Time<input data-segment-field="checkInTime" type="time" required></label>
-      <label class="field">Check-out date<input data-segment-field="checkOutDate" type="date" required></label>
+      <label class="field">Check-out date
+        <input data-segment-field="checkOutDate" type="date" required>
+      </label>
       <label class="field">Time<input data-segment-field="checkOutTime" type="time" required></label>
     </div>`;
   segmentElement.querySelector('[data-segment-field="checkInDate"]').value = checkInDate;
   segmentElement.querySelector('[data-segment-field="checkInTime"]').value = checkInTime;
   segmentElement.querySelector('[data-segment-field="checkOutDate"]').value = checkOutDate;
   segmentElement.querySelector('[data-segment-field="checkOutTime"]').value = checkOutTime;
-  if (segment.roomId && roomById(segment.roomId)) {
-    segmentElement.querySelector('[data-segment-field="roomId"]').value = segment.roomId;
-  }
+  segmentElement.querySelector('[data-segment-field="hotelId"]').value = selectedHotelId;
+  updateSegmentRoomOptions(segmentElement, segment.roomId || "");
   container.append(segmentElement);
+}
+
+function updateSegmentRoomOptions(segmentElement, selectedRoomId = "") {
+  const hotelSelect = segmentElement.querySelector('[data-segment-field="hotelId"]');
+  const roomSelect = segmentElement.querySelector('[data-segment-field="roomId"]');
+  const hotelId = hotelSelect.value;
+  const rooms = state.data.rooms
+    .filter((room) => room.hotelId === hotelId)
+    .sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
+  roomSelect.innerHTML = `<option value="">Select a room</option>${rooms.map((room) =>
+    `<option value="${escapeHtml(room.id)}">Room ${escapeHtml(room.roomNumber)}</option>`
+  ).join("")}`;
+  if (rooms.some((room) => room.id === selectedRoomId)) roomSelect.value = selectedRoomId;
+  roomSelect.disabled = rooms.length === 0;
 }
 
 function setItinerarySegments(segments) {
@@ -673,14 +744,15 @@ byId("add-stay-button").addEventListener("click", () => {
 });
 byId("add-room-button").addEventListener("click", () => openRoomDialog(state.selectedHotel === "all" ? "" : state.selectedHotel));
 byId("data-info-button").addEventListener("click", () => {
-  showToast(isAppsScriptApp
+  showToast(isCloudApp
     ? "Bookings and Drive links are shared through your Google Sheet. Documents stay in your Google Drive."
     : "Bookings and Drive links are stored only in this browser. Documents stay in your Google Drive.");
 });
 byId("startup-retry")?.addEventListener("click", () => {
   byId("startup-error").textContent = "";
   byId("startup-retry").classList.add("hidden");
-  initializeAppsScriptData();
+  if (state.authToken) handleGoogleCredential({ credential: state.authToken });
+  else initializeSharedData();
 });
 byId("all-rooms-tab").addEventListener("click", () => {
   state.overviewTab = "all";
@@ -739,6 +811,10 @@ byId("stay-segments").addEventListener("click", (event) => {
       segment.querySelector(".itinerary-segment-header").append(button);
     }
   });
+});
+byId("stay-segments").addEventListener("change", (event) => {
+  if (!event.target.matches('[data-segment-field="hotelId"]')) return;
+  updateSegmentRoomOptions(event.target.closest("[data-itinerary-segment]"));
 });
 
 function parseRoomNumbers(value) {
@@ -927,7 +1003,6 @@ byId("delete-stay-button").addEventListener("click", async () => {
   if (!await saveData()) return;
   stayDialog.close();
   render();
-  initializeAppsScriptData();
   showToast("Stay removed.");
 });
 
@@ -970,3 +1045,4 @@ document.querySelectorAll(".close-dialog").forEach((button) => {
 });
 
 render();
+initializeSharedData();

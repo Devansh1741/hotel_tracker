@@ -10,32 +10,44 @@ The hotels are **Krati Resort**, **Jass Grand**, and **Maantra**. Use **Bulk add
 
 The overview has **All rooms** and **Today** views, plus guest search. A guest group can have an ordered itinerary with different rooms or hotels for each date range. Add another itinerary segment whenever the group changes rooms or hotels; the app checks room conflicts and date order.
 
-The current starter inventory is date-effective for the counts provided: Maantra has 20 rooms from Nov 19, 2026; Jass Grand has 6 from Nov 19 and 14 from Nov 20; Krati Resort has 10 from Nov 20. The room numbers are generated from 101 upward. These are app setup defaults, not connected to a live shared inventory.
+The dashboard statistics show totals across all hotels in Overview and only the selected hotel's counts in a hotel view. Date fields use the browser's native date picker.
+
+The starter inventory has three rooms (1, 2, and 3) at each hotel, available immediately.
 
 For guest documents, upload the file to Google Drive separately and paste its Drive/Docs link into the stay. The app checks that the link uses HTTPS and a Google Drive/Docs domain, but it does not change the file's sharing permissions. Keep Aadhaar and other sensitive files restricted to the intended people.
 
-## Google Sheets and Apps Script shared app
+## Vercel website and Google Sheets sync
 
-The app is prepared to run inside Apps Script so it can use the authenticated `google.script.run` bridge instead of making cross-origin web requests. The Apps Script files are in [`apps-script/`](./apps-script/).
+The website is hosted on Vercel. Apps Script is used only as a private Sheets backend; its `/exec` URL is not the website. The Vercel API verifies Google sign-in and checks an email allowlist before forwarding requests. The Apps Script API key belongs only in server-side settings, never in `app.js`, `config.js`, or other public files.
 
-1. In your standalone Apps Script project, replace `Code.gs` with [`apps-script/Code.gs`](./apps-script/Code.gs).
-2. Create three HTML files in the Apps Script editor named **Index**, **Styles**, and **Client**. Paste the corresponding local files [`apps-script/Index.html`](./apps-script/Index.html), [`apps-script/Styles.html`](./apps-script/Styles.html), and [`apps-script/Client.html`](./apps-script/Client.html) into them.
-3. Save, run `initializeStayboard` once, and approve the permissions. It creates the `Hotels`, `Rooms`, and `Stays` tabs and seeds the 44 date-effective rooms. It stops without seeding if those tabs already contain data.
-4. Choose **Deploy → Manage deployments → Edit** on the existing web-app deployment, select **New version**, and deploy. Keep **Execute as: User accessing the web app**, and allow only the intended signed-in Google users. Grant each user Editor access to the Sheet; each user must sign in and authorize access.
-5. Open the deployed web-app URL (ending in `/exec`). This is the shared app; users should open this URL rather than the local `index.html` preview.
+### Configure the Apps Script backend
 
-The app reads and saves shared data through Apps Script. Revision checking prevents an older open page from overwriting newer changes; if that happens, reload the page before trying again. Google Drive files remain in Drive and are not copied into the Sheet. Restrict access to sensitive document links.
+1. In the Apps Script project connected to the spreadsheet, replace `Code.gs` with [`apps-script/Code.gs`](./apps-script/Code.gs).
+2. In **Project Settings → Script properties**, add `STAYBOARD_API_KEY` with a long, unique secret. You will enter the same value as a Vercel environment variable; do not put it in this repository.
+3. If the Sheet is new and empty, run `initializeStayboard` once. If it is already initialized, keep its existing data. The updated script appends `firstCheckInAt` and `firstCheckOutAt` to `Stays` when needed and backfills those columns from existing first itinerary segments. They contain actual date-time cells.
+4. Choose **Deploy → Manage deployments → Edit**, select **New version**, and deploy as a web app that **executes as you** and is accessible to **Anyone**. Vercel sends requests only after Google sign-in and allowlist checks, and Apps Script rejects requests without the server-side API key. The `/exec` URL responds with an API status message, not a website.
 
-The standalone local `index.html` preview continues to use browser local storage and does not sync with the deployed app.
+### Configure Google sign-in and Vercel
 
-## Current storage and privacy
+1. In Google Cloud Console, create a **Web application** OAuth client ID. Add the exact website origins (for example, `https://hotel.shiv-may-sangam.site` and your Vercel project's production `https://<project>.vercel.app` URL) to **Authorized JavaScript origins**.
+2. Add the client ID to [`config.js`](./config.js). Set the same ID as Vercel's `GOOGLE_CLIENT_ID` environment variable.
+3. Set these Vercel environment variables:
+   - `GOOGLE_CLIENT_ID`: the Web OAuth client ID.
+   - `ALLOWED_EMAILS`: comma-separated Google account email addresses permitted to use the app.
+   - `APPS_SCRIPT_URL`: the deployed Apps Script `/exec` URL.
+   - `STAYBOARD_API_KEY`: the same secret stored in Apps Script Script properties.
+4. Deploy the site to Vercel and add the desired custom domain there. Vercel installs the server dependency in [`package.json`](./package.json) for the `/api/data` function.
 
-This starter version keeps booking details and Google Drive links in the browser's local storage. Multiple people and devices do not share data yet. The app does not upload documents: upload the document to Google Drive yourself, then paste its HTTPS Drive or Docs link into the stay. Links are not synced across browsers or devices and may be lost if browser site data is cleared. The Drive file's own sharing permissions still control who can open it. For sensitive identity documents, keep sharing restricted to the intended account(s).
+Authorized users sign in on the website; they do not need direct Sheet Editor access because Apps Script writes as the spreadsheet owner. Grant them access to any Drive documents separately. The app uses revision checking to prevent an older page from overwriting newer shared data; reload if another user has saved first. Local `index.html` preview remains browser-local and does not sync.
+
+## Storage and privacy
+
+The Apps Script backend reads and writes booking details and Google Drive links in the shared Google Sheet. The Vercel API checks Google sign-in and the allowlist before forwarding requests. The standalone local preview keeps data in that browser's local storage and does not sync. The app does not upload documents: upload each file to Google Drive yourself, then paste its HTTPS Drive or Docs link into the stay. The Drive file's own sharing permissions control who can open it. For sensitive identity documents, keep sharing restricted to the intended accounts.
 
 The room status **Extra** is a manual label for a special or additional room. Existing attachments saved by an older version remain downloadable from stay details.
 
 ## Information needed to finish setup
 
 - What you mean by **Extra** if it should mean something other than a manually tagged room.
-- Whether anyone else needs access to the app.
-- Deploy the Apps Script backend and connect/host the frontend before using shared live bookings.
+- The Google OAuth Web client ID and the Google accounts to put in Vercel's `ALLOWED_EMAILS`.
+- Set the four Vercel environment variables and deploy the Apps Script backend before using shared live bookings.

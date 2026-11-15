@@ -28,6 +28,7 @@ button { cursor: pointer; }
 .startup-card { width: min(100%, 420px); padding: 24px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: 0 12px 40px #25272c18; }
 .startup-card strong { font-size: 16px; }
 .startup-card p { color: #777980; font-size: 13px; line-height: 1.5; }
+#google-signin-button { margin-top: 16px; }
 
 .sidebar {
   position: fixed; inset: 0 auto 0 0; z-index: 2; display: flex; flex-direction: column;
@@ -132,10 +133,14 @@ h2 { margin: 0; font: 700 17px system-ui, sans-serif; letter-spacing: -.25px; }
 .itinerary-segment { display: grid; gap: 10px; padding: 12px; border: 1px solid #e9ebe6; border-radius: 8px; background: #fbfcfa; }
 .itinerary-segment-header { display: flex; align-items: center; justify-content: space-between; color: #515359; font-size: 11px; }
 .itinerary-segment .field { font-size: 10px; }
+.itinerary-room-selection { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .itinerary-dates { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .add-segment-button { justify-self: start; min-height: 36px; }
 .hotel-panel { overflow: hidden; border: 1px solid #ecece9; border-radius: 10px; background: #fff; }
 .hotel-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 18px; border-bottom: 1px solid #f0f0ed; }
+.hotel-panel-actions { display: flex; align-items: center; gap: 5px; }
+.hotel-collapse { color: #347951; }
+.hotel-panel-content.hidden { display: none; }
 .hotel-title { display: flex; align-items: center; gap: 10px; }
 .hotel-monogram { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 8px; background: #eef4ef; color: #367550; font: 700 12px system-ui, sans-serif; }
 .hotel-title h3 { margin: 0; font: 700 13px system-ui, sans-serif; }
@@ -237,6 +242,8 @@ h2 { margin: 0; font: 700 17px system-ui, sans-serif; letter-spacing: -.25px; }
   .field input, .field select { min-height: 44px; font-size: 16px; }
   .field textarea { font-size: 16px; }
   .itinerary-dates { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hotel-panel-header { align-items: flex-start; flex-direction: column; }
+  .hotel-panel-actions { width: 100%; justify-content: flex-end; }
   .overview-tab { min-height: 40px; padding: 0 14px; font-size: 11px; }
   .icon-button { width: 40px; height: 40px; }
   .toast { right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); }

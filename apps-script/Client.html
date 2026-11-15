@@ -1,4 +1,4 @@
-﻿<script>
+<script>
 const STORAGE_KEY = "stayboard-data-v1";
 const DB_NAME = "stayboard-documents";
 const DB_VERSION = 1;
@@ -7,12 +7,7 @@ const DEFAULT_HOTELS = [
   { id: "hotel-2", name: "Jass Grand" },
   { id: "hotel-3", name: "Maantra" }
 ];
-const DEFAULT_ROOM_NUMBERS = Array.from({ length: 10 }, (_, index) => String(101 + index));
-const ROOM_INVENTORY_PLAN = {
-  "hotel-1": { "101-110": "2026-11-20" },
-  "hotel-2": { "101-106": "2026-11-19", "107-114": "2026-11-20" },
-  "hotel-3": { "101-120": "2026-11-19" }
-};
+const DEFAULT_ROOM_NUMBERS = ["1", "2", "3"];
 
 const state = {
   data: loadData(),
@@ -64,49 +59,42 @@ function loadData() {
 }
 
 function createDefaultRooms(hotels) {
-  return hotels.flatMap((hotel) => {
-    const plan = Object.entries(ROOM_INVENTORY_PLAN[hotel.id] || {});
-    if (!plan.length) {
-      return DEFAULT_ROOM_NUMBERS.map((roomNumber) => ({
-        id: makeId("room"), hotelId: hotel.id, roomNumber, isExtra: false
-      }));
-    }
-    return plan.flatMap(([range, availableFrom]) => {
-      const [first, last] = range.split("-").map(Number);
-      return Array.from({ length: last - first + 1 }, (_, index) => ({
-        id: makeId("room"),
-        hotelId: hotel.id,
-        roomNumber: String(first + index),
-        isExtra: false,
-        availableFrom
-      }));
-    });
-  });
+  return hotels.flatMap((hotel) => DEFAULT_ROOM_NUMBERS.map((roomNumber) => ({
+    id: makeId("room"), hotelId: hotel.id, roomNumber, isExtra: false
+  })));
 }
 
 function applyDefaultInventoryPlan(data) {
   let changed = false;
   for (const hotel of data.hotels) {
-    const plan = Object.entries(ROOM_INVENTORY_PLAN[hotel.id] || {});
-    if (!plan.length) continue;
-    for (const [range, availableFrom] of plan) {
-      const [first, last] = range.split("-").map(Number);
-      for (let roomNumber = first; roomNumber <= last; roomNumber += 1) {
-        let room = data.rooms.find((entry) =>
-          entry.hotelId === hotel.id && entry.roomNumber.toLowerCase() === String(roomNumber)
-        );
-        if (!room) {
-          room = { id: makeId("room"), hotelId: hotel.id, roomNumber: String(roomNumber), isExtra: false };
-          data.rooms.push(room);
-          changed = true;
-        }
-        const hasEarlierBooking = data.stays.some((stay) =>
-          segmentsForStay(stay).some((segment) => segment.roomId === room.id && segment.checkInDate < availableFrom)
-        );
-        if (!room.availableFrom && !hasEarlierBooking) {
-          room.availableFrom = availableFrom;
-          changed = true;
-        }
+    const currentHotelRooms = data.rooms.filter((room) => room.hotelId === hotel.id);
+    const hasBookings = data.stays.some((stay) =>
+      segmentsForStay(stay).some((segment) =>
+        currentHotelRooms.some((room) => room.id === segment.roomId)
+      )
+    );
+    if (hasBookings) continue;
+
+    const desiredNumbers = new Set(DEFAULT_ROOM_NUMBERS);
+    const desiredRooms = currentHotelRooms.filter((room) => desiredNumbers.has(room.roomNumber));
+    if (currentHotelRooms.length !== desiredRooms.length ||
+        desiredRooms.some((room) => room.availableFrom)) {
+      data.rooms = data.rooms.filter((room) => room.hotelId !== hotel.id || desiredNumbers.has(room.roomNumber));
+      for (const room of data.rooms.filter((entry) => entry.hotelId === hotel.id)) {
+        delete room.availableFrom;
+      }
+      changed = true;
+    }
+
+    for (const roomNumber of DEFAULT_ROOM_NUMBERS) {
+      if (!data.rooms.some((room) => room.hotelId === hotel.id && room.roomNumber === roomNumber)) {
+        data.rooms.push({
+          id: makeId("room"),
+          hotelId: hotel.id,
+          roomNumber,
+          isExtra: false
+        });
+        changed = true;
       }
     }
   }
@@ -286,16 +274,16 @@ function renderNav() {
   const allActive = state.selectedHotel === "all";
   hotelNav.innerHTML = `
     <button class="nav-item ${allActive && state.currentPage === "overview" ? "active" : ""}" type="button" data-hotel="all">
-      <span class="nav-symbol">âŒ‚</span><span>Overview</span>
+      <span class="nav-symbol">⌂</span><span>Overview</span>
     </button>
     ${state.data.hotels.map((hotel, index) => {
       const count = state.data.rooms.filter((room) => room.hotelId === hotel.id).length;
       return `<button class="nav-item ${state.selectedHotel === hotel.id && state.currentPage === "overview" ? "active" : ""}" type="button" data-hotel="${escapeHtml(hotel.id)}">
-        <span class="nav-symbol">${["âŒ‚", "âŒ‘", "âŒ‚"][index % 3]}</span><span>${escapeHtml(hotel.name)}</span><span class="nav-room-count">${count}</span>
+        <span class="nav-symbol">${["⌂", "⌑", "⌂"][index % 3]}</span><span>${escapeHtml(hotel.name)}</span><span class="nav-room-count">${count}</span>
       </button>`;
     }).join("")}
     <button class="nav-item ${state.currentPage === "bulk" ? "active" : ""}" type="button" data-page="bulk">
-      <span class="nav-symbol">ï¼‹</span><span>Bulk add rooms</span>
+      <span class="nav-symbol">＋</span><span>Bulk add rooms</span>
     </button>`;
   hotelNav.querySelectorAll("[data-hotel]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -311,11 +299,18 @@ function renderNav() {
 }
 
 function renderDashboard() {
-  const rooms = state.data.rooms;
+  const selected = state.selectedHotel === "all" ? null : hotelById(state.selectedHotel);
+  const rooms = selected
+    ? state.data.rooms.filter((room) => room.hotelId === selected.id)
+    : state.data.rooms;
   const now = new Date();
   const activeRooms = rooms.filter((room) => roomAvailableOn(room, dateKey(now)));
   const occupied = rooms.map((room) => ({ room, stay: currentStay(room.id, now) })).filter((item) => item.stay);
-  const arrivals = roomAssignments().filter((assignment) => assignment.checkInDate === dateKey(now));
+  const arrivals = roomAssignments().filter((assignment) =>
+    assignment.checkInDate === dateKey(now) &&
+    rooms.some((room) => room.id === assignment.roomId)
+  );
+  byId("rooms-stat-caption").textContent = selected ? selected.name.toLocaleUpperCase() : "ACROSS ALL HOTELS";
   byId("stat-rooms").innerHTML = `${rooms.length} <span>rooms</span>`;
   byId("stat-available").textContent = `${Math.max(0, activeRooms.length - occupied.length)} available today`;
   byId("stat-occupied").innerHTML = `${occupied.length} <span>rooms</span>`;
@@ -324,13 +319,12 @@ function renderDashboard() {
   byId("hotel-count").textContent = state.data.hotels.length;
   byId("today-label").textContent = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" }).format(now);
 
-  const selected = state.selectedHotel === "all" ? null : hotelById(state.selectedHotel);
   byId("page-crumb").textContent = selected ? selected.name : "Overview";
   byId("heading-eyebrow").textContent = selected ? "HOTEL OVERVIEW" : "YOUR PROPERTIES";
-  byId("page-title").innerHTML = selected ? `${escapeHtml(selected.name)} <span class="wave">âœ¦</span>` : `Good day <span class="wave">âœ¦</span>`;
+  byId("page-title").innerHTML = selected ? `${escapeHtml(selected.name)} <span class="wave">✦</span>` : `Good day <span class="wave">✦</span>`;
   byId("page-subtitle").textContent = selected
     ? "Manage rooms, stays, and guest details for this hotel."
-    : "Hereâ€™s whatâ€™s happening across your hotels.";
+    : "Here’s what’s happening across your hotels.";
   byId("rooms-title").textContent = selected ? "Rooms" : "Your hotels";
   byId("rooms-caption").textContent = selected
     ? "Select a room to add or update a guest itinerary."
@@ -401,7 +395,7 @@ function renderHotels() {
         <div class="hotel-title">
           <span class="hotel-monogram">${escapeHtml(hotel.name.slice(0, 1).toUpperCase())}</span>
           <div><h3>${escapeHtml(hotel.name)}</h3><p>${state.overviewTab === "today"
-            ? `${rooms.length} active today Â· ${totalRooms} total`
+            ? `${rooms.length} active today · ${totalRooms} total`
             : `${rooms.length} ${rooms.length === 1 ? "room" : "rooms"}`}</p></div>
         </div>
         <div>
@@ -480,15 +474,15 @@ function renderSearchResults(query) {
     const itinerary = segmentsForStay(stay).map((segment) => {
       const room = roomById(segment.roomId);
       const hotel = hotelById(room?.hotelId);
-      return `<li><strong>${escapeHtml(hotel?.name || "Hotel")} Â· Room ${escapeHtml(room?.roomNumber || "?")}</strong>
-        <span>${formatDate(segment.checkInDate)} â€“ ${formatDate(segment.checkOutDate)}</span></li>`;
+      return `<li><strong>${escapeHtml(hotel?.name || "Hotel")} · Room ${escapeHtml(room?.roomNumber || "?")}</strong>
+        <span>${formatDate(segment.checkInDate)} – ${formatDate(segment.checkOutDate)}</span></li>`;
     }).join("");
     return `<article class="search-result">
       <button class="search-result-main" type="button" data-edit-stay="${escapeHtml(stay.id)}">
         <span class="search-result-heading"><strong>${escapeHtml(stay.headGuest)}</strong><span>${Number(stay.guestCount)} ${Number(stay.guestCount) === 1 ? "person" : "people"}</span></span>
         <span class="search-result-guests">${escapeHtml(guestNames.join(", "))}</span>
         <ul class="search-itinerary">${itinerary}</ul>
-        ${stay.documentUrl ? '<span class="document-mark">â–§ Drive document</span>' : ""}
+        ${stay.documentUrl ? '<span class="document-mark">▧ Drive document</span>' : ""}
       </button>
     </article>`;
   }).join("");
@@ -511,13 +505,13 @@ function renderRoom(room, assignmentOverride = null) {
   const statusLabel = isTodayArrival ? "Arriving today" :
     assignmentOverride && !activeStay && assignmentOverride.checkOutDate === today ? "Checking out" :
       activeStay && assignmentOverride?.checkOutDate === today ? "Checks out today" :
-        activeStay ? (room.isExtra ? "Extra Â· occupied" : "Occupied") :
+        activeStay ? (room.isExtra ? "Extra · occupied" : "Occupied") :
           isUpcoming ? "Upcoming" : isNotOpen ? `Opens ${formatDate(room.availableFrom)}` : (room.isExtra ? "Extra" : "Available");
   const classes = ["room-card", activeStay ? "occupied" : "", isUpcoming ? "upcoming" : "", isNotOpen ? "not-open" : "", room.isExtra ? "extra" : ""].filter(Boolean).join(" ");
   return `<button class="${classes}" type="button" data-room="${escapeHtml(room.id)}" ${stay?.stayId ? `data-stay-id="${escapeHtml(stay.stayId)}"` : ""} aria-label="Room ${escapeHtml(room.roomNumber)} at ${escapeHtml(hotel?.name || "hotel")}: ${stay ? `${escapeHtml(stay.headGuest)}, ${stay.guestCount} people` : statusLabel}">
     <span class="room-card-top"><span class="room-number">Room ${escapeHtml(room.roomNumber)}</span><span class="room-state">${statusLabel}</span></span>
     ${stay ? `<span class="room-guest">${escapeHtml(stay.headGuest)}</span><span class="room-meta"><strong>${Number(stay.guestCount)} ${Number(stay.guestCount) === 1 ? "person" : "people"}</strong> ${isUpcoming ? "booked" : isTodayArrival ? "arriving today" : "in this room"}</span>
-      <span class="room-card-footer"><span>${formatDate(stay.checkInDate)} â€“ ${formatDate(stay.checkOutDate)}</span>${stay.documentId || stay.documentUrl ? '<span class="document-mark" aria-label="Guest document linked">â–§ Doc</span>' : ""}</span>`
+      <span class="room-card-footer"><span>${formatDate(stay.checkInDate)} – ${formatDate(stay.checkOutDate)}</span>${stay.documentId || stay.documentUrl ? '<span class="document-mark" aria-label="Guest document linked">▧ Doc</span>' : ""}</span>`
       : `<span class="room-guest" style="color:#85878b;font-weight:500">${isNotOpen ? "Not available yet" : "Ready for a stay"}</span><span class="room-meta">${isNotOpen ? `Available from ${formatDate(room.availableFrom)}` : room.isExtra ? "Special / additional room" : "No current guests"}</span>`}
   </button>`;
 }
@@ -577,7 +571,7 @@ function addItinerarySegment(segment = {}) {
         state.data.hotels.findIndex((hotel) => hotel.id === b.hotelId);
       return hotelOrder || a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true });
     })
-    .map((room) => `<option value="${escapeHtml(room.id)}">${escapeHtml(hotelById(room.hotelId)?.name || "Hotel")} Â· Room ${escapeHtml(room.roomNumber)}</option>`)
+    .map((room) => `<option value="${escapeHtml(room.id)}">${escapeHtml(hotelById(room.hotelId)?.name || "Hotel")} · Room ${escapeHtml(room.roomNumber)}</option>`)
     .join("");
   const segmentElement = document.createElement("section");
   segmentElement.className = "itinerary-segment";
@@ -591,9 +585,13 @@ function addItinerarySegment(segment = {}) {
       <select data-segment-field="roomId" required>${roomOptions}</select>
     </label>
     <div class="itinerary-dates">
-      <label class="field">Check-in date<input data-segment-field="checkInDate" type="date" required></label>
+      <label class="field">Check-in date
+        <input data-segment-field="checkInDate" type="date" required>
+      </label>
       <label class="field">Time<input data-segment-field="checkInTime" type="time" required></label>
-      <label class="field">Check-out date<input data-segment-field="checkOutDate" type="date" required></label>
+      <label class="field">Check-out date
+        <input data-segment-field="checkOutDate" type="date" required>
+      </label>
       <label class="field">Time<input data-segment-field="checkOutTime" type="time" required></label>
     </div>`;
   segmentElement.querySelector('[data-segment-field="checkInDate"]').value = checkInDate;
@@ -888,7 +886,7 @@ byId("stay-form").addEventListener("submit", async (event) => {
   }
   const headGuest = form.elements.headGuest.value.trim();
   if (!headGuest) {
-    error.textContent = "Enter the head guestâ€™s name.";
+    error.textContent = "Enter the head guest’s name.";
     return;
   }
 
@@ -928,7 +926,6 @@ byId("delete-stay-button").addEventListener("click", async () => {
   if (!await saveData()) return;
   stayDialog.close();
   render();
-  initializeAppsScriptData();
   showToast("Stay removed.");
 });
 
@@ -971,5 +968,6 @@ document.querySelectorAll(".close-dialog").forEach((button) => {
 });
 
 render();
+initializeAppsScriptData();
 
 </script>

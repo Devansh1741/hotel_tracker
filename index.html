@@ -6,13 +6,16 @@
     <meta name="theme-color" content="#f6f7f4">
     <title>Stayboard — Hotel tracker</title>
     <link rel="stylesheet" href="styles.css">
+    <script src="https://accounts.google.com/gsi/client" defer></script>
+    <script src="config.js" defer></script>
     <script src="app.js" defer></script>
   </head>
   <body>
     <div class="startup-overlay" id="startup-overlay" role="status" aria-live="polite">
       <div class="startup-card">
-        <strong>Connecting to shared hotel data…</strong>
+        <strong id="startup-title">Connecting to shared hotel data…</strong>
         <p id="startup-error"></p>
+        <div id="google-signin-button"></div>
         <button class="button button-primary hidden" id="startup-retry" type="button">Try again</button>
       </div>
     </div>
@@ -55,7 +58,7 @@
 
         <section class="stats-grid" id="stats-grid" aria-label="Hotel summary">
           <article class="stat-card">
-            <div class="stat-top"><span class="stat-icon icon-lilac">▦</span><span class="stat-caption">ACROSS ALL HOTELS</span></div>
+            <div class="stat-top"><span class="stat-icon icon-lilac">▦</span><span class="stat-caption" id="rooms-stat-caption">ACROSS ALL HOTELS</span></div>
             <div class="stat-value" id="stat-rooms">0 <span>rooms</span></div>
             <div class="stat-foot"><span class="dot dot-green"></span><span id="stat-available">0 available</span></div>
           </article>

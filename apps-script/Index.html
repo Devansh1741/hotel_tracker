@@ -1,16 +1,16 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f6f7f4">
-    <title>Stayboard â€” Hotel tracker</title>
+    <title>Stayboard — Hotel tracker</title>
     <?!= include("Styles"); ?>
   </head>
   <body>
     <div class="startup-overlay" id="startup-overlay" role="status" aria-live="polite">
       <div class="startup-card">
-        <strong>Connecting to shared hotel dataâ€¦</strong>
+        <strong>Connecting to shared hotel data…</strong>
         <p id="startup-error"></p>
         <button class="button button-primary hidden" id="startup-retry" type="button">Try again</button>
       </div>
@@ -30,7 +30,7 @@
         <div class="profile">
           <div class="avatar">Y</div>
           <div><strong>Your workspace</strong><span>Personal account</span></div>
-          <span class="profile-dots">Â·Â·Â·</span>
+          <span class="profile-dots">···</span>
         </div>
       </aside>
 
@@ -46,30 +46,30 @@
         <section class="page-heading">
           <div>
             <p class="eyebrow" id="heading-eyebrow">YOUR PROPERTIES</p>
-            <h1 id="page-title">Good day <span class="wave">âœ¦</span></h1>
-            <p class="subheading" id="page-subtitle">Hereâ€™s whatâ€™s happening across your hotels.</p>
+            <h1 id="page-title">Good day <span class="wave">✦</span></h1>
+            <p class="subheading" id="page-subtitle">Here’s what’s happening across your hotels.</p>
           </div>
           <button class="button button-secondary" id="add-room-button" type="button"><span class="button-plus">+</span> Add a room</button>
         </section>
 
         <section class="stats-grid" id="stats-grid" aria-label="Hotel summary">
           <article class="stat-card">
-            <div class="stat-top"><span class="stat-icon icon-lilac">â–¦</span><span class="stat-caption">ACROSS ALL HOTELS</span></div>
+            <div class="stat-top"><span class="stat-icon icon-lilac">▦</span><span class="stat-caption" id="rooms-stat-caption">ACROSS ALL HOTELS</span></div>
             <div class="stat-value" id="stat-rooms">0 <span>rooms</span></div>
             <div class="stat-foot"><span class="dot dot-green"></span><span id="stat-available">0 available</span></div>
           </article>
           <article class="stat-card">
-            <div class="stat-top"><span class="stat-icon icon-peach">â—‰</span><span class="stat-caption">RIGHT NOW</span></div>
+            <div class="stat-top"><span class="stat-icon icon-peach">◉</span><span class="stat-caption">RIGHT NOW</span></div>
             <div class="stat-value" id="stat-occupied">0 <span>rooms</span></div>
             <div class="stat-foot"><span class="dot dot-peach"></span><span>Currently occupied</span></div>
           </article>
           <article class="stat-card">
-            <div class="stat-top"><span class="stat-icon icon-blue">â™§</span><span class="stat-caption">GUESTS IN-HOUSE</span></div>
+            <div class="stat-top"><span class="stat-icon icon-blue">♧</span><span class="stat-caption">GUESTS IN-HOUSE</span></div>
             <div class="stat-value" id="stat-guests">0 <span>people</span></div>
             <div class="stat-foot"><span class="dot dot-blue"></span><span>Across all properties</span></div>
           </article>
           <article class="stat-card">
-            <div class="stat-top"><span class="stat-icon icon-yellow">â†—</span><span class="stat-caption">CHECKING IN TODAY</span></div>
+            <div class="stat-top"><span class="stat-icon icon-yellow">↗</span><span class="stat-caption">CHECKING IN TODAY</span></div>
             <div class="stat-value" id="stat-arrivals">0 <span>groups</span></div>
             <div class="stat-foot"><span class="dot dot-yellow"></span><span>Expected arrivals</span></div>
           </article>
@@ -87,7 +87,7 @@
                 <button class="overview-tab" id="today-tab" type="button">Today</button>
               </div>
               <label class="search-field">
-                <span aria-hidden="true">âŒ•</span>
+                <span aria-hidden="true">⌕</span>
                 <input id="guest-search" type="search" placeholder="Search any guest name" autocomplete="off">
               </label>
             </div>
@@ -127,7 +127,7 @@
           </div>
         </section>
 
-        <footer class="footer-note"><span class="shield">â—‡</span> <span id="footer-message">Not shared yet: bookings and links stay in this browser; Drive files stay in Drive.</span> <button id="data-info-button" type="button">Learn more</button></footer>
+        <footer class="footer-note"><span class="shield">◇</span> <span id="footer-message">Not shared yet: bookings and links stay in this browser; Drive files stay in Drive.</span> <button id="data-info-button" type="button">Learn more</button></footer>
       </main>
     </div>
 
@@ -135,11 +135,11 @@
       <form id="stay-form">
         <div class="dialog-heading">
           <div><p class="eyebrow">GUEST BOOKING</p><h2 id="stay-dialog-title">Add a stay</h2></div>
-          <button class="icon-button close-dialog" type="button" aria-label="Close">Ã—</button>
+          <button class="icon-button close-dialog" type="button" aria-label="Close">×</button>
         </div>
         <input type="hidden" name="stayId">
         <div class="form-grid">
-          <label class="field full-field">Head guestâ€™s name
+          <label class="field full-field">Head guest’s name
             <input name="headGuest" type="text" placeholder="e.g. Priya Sharma" required maxlength="100">
           </label>
           <label class="field">Number of people
@@ -155,8 +155,8 @@
             <button class="button button-secondary add-segment-button" id="add-segment-button" type="button">+ Add another room / hotel</button>
           </div>
           <label class="field full-field">Google Drive document link <span class="optional">(optional)</span>
-            <input name="documentUrl" type="url" inputmode="url" placeholder="https://drive.google.com/file/d/â€¦" autocomplete="url" maxlength="2048">
-            <span class="file-hint">Paste a link to a file youâ€™ve already uploaded. The app saves the link, not the file. Check Drive sharing settings so the right people can open it.</span>
+            <input name="documentUrl" type="url" inputmode="url" placeholder="https://drive.google.com/file/d/…" autocomplete="url" maxlength="2048">
+            <span class="file-hint">Paste a link to a file you’ve already uploaded. The app saves the link, not the file. Check Drive sharing settings so the right people can open it.</span>
           </label>
           <span class="file-hint full-field" id="existing-document-hint"></span>
           <a class="text-button full-field hidden" id="open-document-link" href="#" target="_blank" rel="noopener noreferrer">Open document in Google Drive</a>
@@ -176,7 +176,7 @@
       <form id="room-form">
         <div class="dialog-heading">
           <div><p class="eyebrow">PROPERTY SETUP</p><h2>Add a room</h2></div>
-          <button class="icon-button close-dialog" type="button" aria-label="Close">Ã—</button>
+          <button class="icon-button close-dialog" type="button" aria-label="Close">×</button>
         </div>
         <div class="form-grid">
           <label class="field full-field">Hotel
@@ -190,7 +190,7 @@
           </label>
           <label class="checkbox-field full-field"><input name="isExtra" type="checkbox"> Mark as an extra room</label>
         </div>
-        <p class="form-help">Room numbers must be unique within each hotel. â€œExtraâ€ is a manual label for a special or additional room.</p>
+        <p class="form-help">Room numbers must be unique within each hotel. “Extra” is a manual label for a special or additional room.</p>
         <div class="form-error" id="room-error" role="alert"></div>
         <div class="dialog-actions">
           <span class="action-spacer"></span>
@@ -204,7 +204,7 @@
       <form id="hotel-form">
         <div class="dialog-heading">
           <div><p class="eyebrow">PROPERTY DETAILS</p><h2>Rename hotel</h2></div>
-          <button class="icon-button close-dialog" type="button" aria-label="Close">Ã—</button>
+          <button class="icon-button close-dialog" type="button" aria-label="Close">×</button>
         </div>
         <input type="hidden" name="hotelId">
         <label class="field full-field">Hotel name
@@ -223,4 +223,3 @@
     <?!= include("Client"); ?>
   </body>
 </html>
-

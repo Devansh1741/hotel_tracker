@@ -4,7 +4,10 @@ const REVISION_KEY = "stayboardRevision";
 const TABLES = {
   Hotels: ["id", "name"],
   Rooms: ["id", "hotelId", "roomNumber", "isExtra", "availableFrom"],
-  Stays: ["id", "headGuest", "guestCount", "otherGuests", "segmentsJson", "documentUrl", "documentId", "documentName"]
+  Stays: [
+    "id", "headGuest", "guestCount", "otherGuests", "segmentsJson",
+    "documentUrl", "documentId", "documentName", "firstCheckInAt", "firstCheckOutAt"
+  ]
 };
 
 function initializeStayboard() {
@@ -25,31 +28,88 @@ function initializeStayboard() {
       { id: "hotel-3", name: "Maantra" }
     ];
     const rooms = [];
-    addRooms_(rooms, "hotel-1", 101, 110, "2026-11-20");
-    addRooms_(rooms, "hotel-2", 101, 106, "2026-11-19");
-    addRooms_(rooms, "hotel-2", 107, 114, "2026-11-20");
-    addRooms_(rooms, "hotel-3", 101, 120, "2026-11-19");
+    hotels.forEach(function (hotel) {
+      addRooms_(rooms, hotel.id, 1, 3, "");
+    });
 
     writeData_(sheets, { hotels: hotels, rooms: rooms, stays: [] });
     PropertiesService.getScriptProperties().setProperty(REVISION_KEY, "0");
-    return "Stayboard tabs initialized with 3 hotels and 44 rooms.";
+    return "Stayboard tabs initialized with 3 hotels and 9 rooms.";
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function setInventoryToRooms123() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheets = ensureSheets_();
+    const data = readData_();
+    const keptRooms = [];
+    const removedRoomIds = new Set();
+    data.rooms.forEach(function (room) {
+      if (["1", "2", "3"].includes(room.roomNumber)) {
+        keptRooms.push(room);
+      } else {
+        removedRoomIds.add(room.id);
+      }
+    });
+
+    const bookedRooms = new Set();
+    data.stays.forEach(function (stay) {
+      const segments = Array.isArray(stay.segments) ? stay.segments : [];
+      segments.forEach(function (segment) {
+        if (removedRoomIds.has(segment.roomId)) bookedRooms.add(segment.roomId);
+      });
+    });
+    if (bookedRooms.size) {
+      throw new Error(
+        "No rooms were changed: existing stays refer to rooms outside 1-3. " +
+        "Update or remove those stays in the app, then run this function again."
+      );
+    }
+
+    data.hotels.forEach(function (hotel) {
+      ["1", "2", "3"].forEach(function (roomNumber) {
+        if (!keptRooms.some(function (room) {
+          return room.hotelId === hotel.id && room.roomNumber === roomNumber;
+        })) {
+          keptRooms.push({
+            id: "room-" + hotel.id + "-" + roomNumber,
+            hotelId: hotel.id,
+            roomNumber: roomNumber,
+            isExtra: false,
+            availableFrom: ""
+          });
+        }
+      });
+    });
+
+    data.rooms = keptRooms;
+    writeData_(sheets, data);
+    PropertiesService.getScriptProperties().setProperty(
+      REVISION_KEY,
+      String(Number(getRevision_()) + 1)
+    );
+    return "Inventory updated: rooms 1, 2, and 3 for each hotel (9 rooms total).";
   } finally {
     lock.releaseLock();
   }
 }
 
 function doGet() {
-  return HtmlService.createTemplateFromFile("Index")
-    .evaluate()
-    .setTitle("Stayboard — Hotel tracker")
-    .addMetaTag("viewport", "width=device-width, initial-scale=1");
+  return jsonOutput_({
+    ok: true,
+    message: "Stayboard Sheets API is running. Use the website to access hotel data."
+  });
 }
 
 function include(filename) {
   return HtmlService.createHtmlOutputFromFile(filename).getContent();
 }
 
-function getStayboardData() {
+function getStayboardData_() {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
@@ -63,7 +123,7 @@ function getStayboardData() {
   }
 }
 
-function saveStayboardData(request) {
+function saveStayboardData_(request) {
   if (!request || request.action !== "save" || !request.data) {
     return { ok: false, error: "Expected action 'save' and a complete data object." };
   }
@@ -103,7 +163,25 @@ function doPost(event) {
   } catch (error) {
     return jsonOutput_({ ok: false, error: "Request body must be valid JSON." });
   }
-  return jsonOutput_(saveStayboardData(request));
+
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    return jsonOutput_({ ok: false, error: "Request body must be a JSON object." });
+  }
+  const expectedApiKey = PropertiesService.getScriptProperties().getProperty("STAYBOARD_API_KEY");
+  if (!expectedApiKey || request.apiKey !== expectedApiKey) {
+    return jsonOutput_({ ok: false, error: "Unauthorized." });
+  }
+  delete request.apiKey;
+
+  if (request.action === "load") {
+    try {
+      return jsonOutput_(getStayboardData_());
+    } catch (error) {
+      console.error(error);
+      return jsonOutput_({ ok: false, error: error.message || "Could not load Stayboard data." });
+    }
+  }
+  return jsonOutput_(saveStayboardData_(request));
 }
 
 function addRooms_(rooms, hotelId, first, last, availableFrom) {
@@ -128,9 +206,15 @@ function ensureSheets_() {
     if (sheet.getLastRow() === 0) {
       sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
     } else {
-      const currentHeaders = sheet.getRange(1, 1, 1, headers.length).getDisplayValues()[0];
-      if (headers.some(function (header, index) { return currentHeaders[index] !== header; })) {
+      const currentColumnCount = sheet.getLastColumn();
+      const currentHeaders = sheet.getRange(1, 1, 1, currentColumnCount).getDisplayValues()[0];
+      if (currentColumnCount > headers.length ||
+          currentHeaders.some(function (header, index) { return headers[index] !== header; })) {
         throw new Error("The " + name + " tab has unexpected headers. Do not rename its columns.");
+      }
+      if (currentColumnCount < headers.length) {
+        sheet.getRange(1, currentColumnCount + 1, 1, headers.length - currentColumnCount)
+          .setValues([headers.slice(currentColumnCount)]);
       }
     }
     result[name] = sheet;
@@ -170,6 +254,11 @@ function readData_() {
       documentName: row[7] || ""
     };
   });
+  backfillFirstStayDateTimes_(
+    sheets.Stays,
+    stays,
+    sheets.Stays.getParent().getSpreadsheetTimeZone()
+  );
   return { hotels: hotels, rooms: rooms, stays: stays };
 }
 
@@ -180,6 +269,7 @@ function readRows_(sheet) {
 }
 
 function writeData_(sheets, data) {
+  const spreadsheetTimeZone = sheets.Stays.getParent().getSpreadsheetTimeZone();
   writeTable_(sheets.Hotels, TABLES.Hotels, data.hotels.map(function (hotel) {
     return [hotel.id, hotel.name];
   }));
@@ -195,9 +285,43 @@ function writeData_(sheets, data) {
       JSON.stringify(Array.isArray(stay.segments) ? stay.segments : legacySegments_(stay)),
       stay.documentUrl || "",
       stay.documentId || "",
-      stay.documentName || ""
+      stay.documentName || "",
+      firstSegmentDateTime_(stay, "checkInDate", "checkInTime", spreadsheetTimeZone),
+      firstSegmentDateTime_(stay, "checkOutDate", "checkOutTime", spreadsheetTimeZone)
     ];
   }));
+}
+
+function backfillFirstStayDateTimes_(sheet, stays, timeZone) {
+  if (sheet.getLastRow() < 2) return;
+  const range = sheet.getRange(2, 9, sheet.getLastRow() - 1, 2);
+  const values = range.getValues();
+  let changed = false;
+  stays.forEach(function (stay, index) {
+    if (!values[index][0]) {
+      values[index][0] = firstSegmentDateTime_(stay, "checkInDate", "checkInTime", timeZone);
+      if (values[index][0]) changed = true;
+    }
+    if (!values[index][1]) {
+      values[index][1] = firstSegmentDateTime_(stay, "checkOutDate", "checkOutTime", timeZone);
+      if (values[index][1]) changed = true;
+    }
+  });
+  if (changed) {
+    range.setNumberFormat("yyyy-mm-dd hh:mm");
+    range.setValues(values);
+  }
+}
+
+function firstSegmentDateTime_(stay, dateKey, timeKey, timeZone) {
+  const segments = Array.isArray(stay.segments) ? stay.segments : legacySegments_(stay);
+  const first = segments[0];
+  if (!first || !validDateTime_(first[dateKey], first[timeKey])) return "";
+  return Utilities.parseDate(
+    first[dateKey] + " " + first[timeKey],
+    timeZone,
+    "yyyy-MM-dd HH:mm"
+  );
 }
 
 function writeTable_(sheet, headers, rows) {
@@ -211,6 +335,9 @@ function writeTable_(sheet, headers, rows) {
   });
   const range = sheet.getRange(2, 1, safeRows.length, headers.length);
   range.setNumberFormat("@");
+  if (sheet.getName() === "Stays") {
+    sheet.getRange(2, 9, safeRows.length, 2).setNumberFormat("yyyy-mm-dd hh:mm");
+  }
   range.setValues(safeRows);
 }
 
