@@ -40,6 +40,36 @@ function initializeStayboard() {
   }
 }
 
+function resetStayboardAndCreateConfirmedInventory() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const sheets = ensureSheets_();
+    const hotels = [
+      { id: "hotel-1", name: "Krati Resort" },
+      { id: "hotel-2", name: "Jass Grand" },
+      { id: "hotel-3", name: "Maantra" }
+    ];
+    const rooms = [];
+    addRooms_(rooms, "hotel-2", 1, 14, "");
+    addRooms_(rooms, "hotel-3", 1, 20, "");
+    const data = { hotels: hotels, rooms: rooms, stays: [] };
+    const validationError = validateData_(data);
+    if (validationError) {
+      throw new Error("Reset stopped: " + validationError);
+    }
+
+    writeData_(sheets, data);
+    PropertiesService.getScriptProperties().setProperty(
+      REVISION_KEY,
+      String(Number(getRevision_()) + 1)
+    );
+    return "Reset complete: 3 hotels, 14 Jass Grand rooms, 20 Maantra rooms, and no stays.";
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function setInventoryToRooms123() {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);

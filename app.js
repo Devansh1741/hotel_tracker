@@ -15,6 +15,7 @@ const state = {
   currentPage: "overview",
   overviewTab: "all",
   searchQuery: "",
+  hotelDates: {},
   collapsedHotels: new Set(),
   toastTimer: null
 };
@@ -380,9 +381,9 @@ function renderDashboard() {
     : "Here’s what’s happening across your hotels.";
   byId("rooms-title").textContent = selected ? "Rooms" : "Your hotels";
   byId("rooms-caption").textContent = selected
-    ? "Select a room to add or update a guest itinerary."
+    ? "Choose a date to view this hotel's rooms and bookings."
     : state.overviewTab === "today"
-      ? "Rooms with current guests or arrivals and departures today."
+      ? "Rooms booked on each hotel's selected date."
       : "Select a hotel to view its rooms and guests.";
   byId("all-rooms-tab").classList.toggle("active", state.overviewTab === "all");
   byId("today-tab").classList.toggle("active", state.overviewTab === "today");
@@ -425,23 +426,18 @@ function renderHotels() {
   const hotels = state.selectedHotel === "all"
     ? state.data.hotels
     : state.data.hotels.filter((hotel) => hotel.id === state.selectedHotel);
-  const today = dateKey(new Date());
+  const defaultDate = dateKey(new Date());
   const visibleHotels = hotels.map((hotel) => {
     const hotelRooms = state.data.rooms.filter((room) => room.hotelId === hotel.id);
+    const selectedDate = state.hotelDates[hotel.id] || defaultDate;
+    const availableRooms = hotelRooms.filter((room) => roomAvailableOn(room, selectedDate));
     const rooms = state.overviewTab === "today"
-      ? hotelRooms.filter((room) => todayAssignment(room.id, today))
-      : hotelRooms;
-    return { hotel, rooms, totalRooms: hotelRooms.length };
-  }).filter(({ rooms }) => state.overviewTab !== "today" || rooms.length);
+      ? availableRooms.filter((room) => assignmentOnDate(room.id, selectedDate))
+      : availableRooms;
+    return { hotel, rooms, totalRooms: hotelRooms.length, selectedDate };
+  });
 
-  if (visibleHotels.length === 0 && state.overviewTab === "today") {
-    hotelContent.innerHTML = `<div class="empty-state"><strong>Nothing scheduled for today</strong>No current guests or check-ins/check-outs for ${escapeHtml(
-      new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric" }).format(new Date())
-    )}.</div>`;
-    return;
-  }
-
-  hotelContent.innerHTML = visibleHotels.map(({ hotel, rooms, totalRooms }) => {
+  hotelContent.innerHTML = visibleHotels.map(({ hotel, rooms, totalRooms, selectedDate }) => {
     rooms.sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
     const collapsed = state.collapsedHotels.has(hotel.id);
     const panelId = `hotel-rooms-${hotel.id}`;
@@ -450,10 +446,13 @@ function renderHotels() {
         <div class="hotel-title">
           <span class="hotel-monogram">${escapeHtml(hotel.name.slice(0, 1).toUpperCase())}</span>
           <div><h3>${escapeHtml(hotel.name)}</h3><p>${state.overviewTab === "today"
-            ? `${rooms.length} active today · ${totalRooms} total`
+            ? `${rooms.length} booked · ${totalRooms} total`
             : `${rooms.length} ${rooms.length === 1 ? "room" : "rooms"}`}</p></div>
         </div>
         <div class="hotel-panel-actions">
+          <label class="hotel-date-filter">Date
+            <input type="date" value="${escapeHtml(selectedDate)}" data-hotel-date="${escapeHtml(hotel.id)}" aria-label="Filter ${escapeHtml(hotel.name)} by date">
+          </label>
           <button class="text-button hotel-collapse" type="button" data-toggle-hotel="${escapeHtml(hotel.id)}"
             aria-expanded="${!collapsed}" aria-controls="${escapeHtml(panelId)}">${collapsed ? "Expand" : "Collapse"}</button>
           <button class="text-button" type="button" data-rename-hotel="${escapeHtml(hotel.id)}">Rename</button>
@@ -462,15 +461,21 @@ function renderHotels() {
       </header>
       <div class="hotel-panel-content ${collapsed ? "hidden" : ""}" id="${escapeHtml(panelId)}">
         ${rooms.length ? `<div class="room-grid">${rooms.map((room) => {
-          const assignment = state.overviewTab === "today" ? todayAssignment(room.id, today) : null;
-          return renderRoom(room, assignment);
+          const assignment = assignmentOnDate(room.id, selectedDate);
+          return renderRoom(room, assignment, selectedDate, true);
         }).join("")}</div>` : `
-          <div class="empty-hotel"><div><strong>No rooms added yet</strong><p>Add your first room number to get started.</p></div>
-            <button class="button button-secondary" type="button" data-add-room="${escapeHtml(hotel.id)}">+ Add a room</button></div>`}
+          <div class="empty-hotel"><div><strong>${state.overviewTab === "today" ? "No bookings on this date" : "No rooms available on this date"}</strong><p>${state.overviewTab === "today" ? "Try another date or view all rooms." : "Choose another date or add rooms to this hotel."}</p></div>
+            ${state.overviewTab === "today" ? "" : `<button class="button button-secondary" type="button" data-add-room="${escapeHtml(hotel.id)}">+ Add a room</button>`}</div>`}
       </div>
     </article>`;
   }).join("");
 
+  hotelContent.querySelectorAll("[data-hotel-date]").forEach((input) => {
+    input.addEventListener("change", () => {
+      state.hotelDates[input.dataset.hotelDate] = input.value || defaultDate;
+      renderHotels();
+    });
+  });
   hotelContent.querySelectorAll("[data-toggle-hotel]").forEach((button) => {
     button.addEventListener("click", () => {
       const hotelId = button.dataset.toggleHotel;
@@ -491,6 +496,10 @@ function renderHotels() {
         openStayDetails(button.dataset.stayId);
       } else {
         const room = roomById(button.dataset.room);
+        if (button.dataset.dateFiltered) {
+          openStayDialog(room.id, "", button.dataset.selectedDate);
+          return;
+        }
         const upcoming = roomAssignments().find((entry) =>
           entry.roomId === room.id && localDateTime(entry.checkInDate, entry.checkInTime) > new Date()
         );
@@ -504,21 +513,24 @@ function renderHotels() {
   });
 }
 
-function todayAssignment(roomId, today = dateKey(new Date())) {
+function assignmentOnDate(roomId, date) {
   const room = roomById(roomId);
-  if (!room || !roomAvailableOn(room, today)) return null;
-  const now = new Date();
-  const assignments = roomAssignments().filter((assignment) => assignment.roomId === roomId);
+  if (!room || !roomAvailableOn(room, date)) return null;
+
+  const dayStart = localDateTime(date, "00:00");
+  const dayEnd = localDateTime(addDateDays(date, 1), "00:00");
+  const assignments = roomAssignments().filter((assignment) =>
+    assignment.roomId === roomId &&
+    localDateTime(assignment.checkInDate, assignment.checkInTime) < dayEnd &&
+    localDateTime(assignment.checkOutDate, assignment.checkOutTime) > dayStart
+  );
+  const midday = localDateTime(date, "12:00");
   return assignments.find((assignment) =>
-    localDateTime(assignment.checkInDate, assignment.checkInTime) <= now &&
-    localDateTime(assignment.checkOutDate, assignment.checkOutTime) > now
-  ) || assignments
-    .filter((assignment) =>
-      assignment.checkInDate === today &&
-      localDateTime(assignment.checkInDate, assignment.checkInTime) > now
-    )
-    .sort((a, b) => localDateTime(a.checkInDate, a.checkInTime) - localDateTime(b.checkInDate, b.checkInTime))[0] ||
-    assignments.find((assignment) => assignment.checkOutDate === today);
+    localDateTime(assignment.checkInDate, assignment.checkInTime) <= midday &&
+    localDateTime(assignment.checkOutDate, assignment.checkOutTime) > midday
+  ) || assignments.sort((a, b) =>
+    localDateTime(a.checkInDate, a.checkInTime) - localDateTime(b.checkInDate, b.checkInTime)
+  )[0] || null;
 }
 
 function renderSearchResults(query) {
@@ -559,25 +571,37 @@ function renderSearchResults(query) {
   });
 }
 
-function renderRoom(room, assignmentOverride = null) {
+function renderRoom(room, assignmentOverride = null, selectedDate = dateKey(new Date()), dateFiltered = false) {
   const hotel = hotelById(room.hotelId);
-  const activeStay = currentStay(room.id);
-  const stay = assignmentOverride || activeStay || roomAssignments()
+  const today = dateKey(new Date());
+  const activeStay = !dateFiltered || selectedDate === today ? currentStay(room.id) : null;
+  const stay = dateFiltered ? assignmentOverride : activeStay || roomAssignments()
     .filter((entry) => entry.roomId === room.id && localDateTime(entry.checkInDate, entry.checkInTime) > new Date())
     .sort((a, b) => localDateTime(a.checkInDate, a.checkInTime) - localDateTime(b.checkInDate, b.checkInTime))[0];
-  const isUpcoming = Boolean(stay && !assignmentOverride && !activeStay);
-  const today = dateKey(new Date());
-  const isTodayArrival = Boolean(assignmentOverride && !activeStay && assignmentOverride.checkInDate === today);
-  const isNotOpen = !stay && !roomAvailableOn(room, dateKey(new Date()));
-  const statusLabel = isTodayArrival ? "Arriving today" :
-    assignmentOverride && !activeStay && assignmentOverride.checkOutDate === today ? "Checking out" :
-      activeStay && assignmentOverride?.checkOutDate === today ? "Checks out today" :
-        activeStay ? (room.isExtra ? "Extra · occupied" : "Occupied") :
-          isUpcoming ? "Upcoming" : isNotOpen ? `Opens ${formatDate(room.availableFrom)}` : (room.isExtra ? "Extra" : "Available");
-  const classes = ["room-card", activeStay ? "occupied" : "", isUpcoming ? "upcoming" : "", isNotOpen ? "not-open" : "", room.isExtra ? "extra" : ""].filter(Boolean).join(" ");
-  return `<button class="${classes}" type="button" data-room="${escapeHtml(room.id)}" ${stay?.stayId ? `data-stay-id="${escapeHtml(stay.stayId)}"` : ""} aria-label="Room ${escapeHtml(room.roomNumber)} at ${escapeHtml(hotel?.name || "hotel")}: ${stay ? `${escapeHtml(stay.headGuest)}, ${stay.guestCount} people` : statusLabel}">
+  const isUpcoming = dateFiltered
+    ? Boolean(stay && !activeStay && stay.checkInDate === selectedDate &&
+      (selectedDate > today || localDateTime(stay.checkInDate, stay.checkInTime) > new Date()))
+    : Boolean(stay && !activeStay);
+  const isTodayArrival = Boolean(dateFiltered
+    ? stay && selectedDate === today && !activeStay && stay.checkInDate === today
+    : assignmentOverride && !activeStay && assignmentOverride.checkInDate === today);
+  const isNotOpen = !stay && !roomAvailableOn(room, selectedDate);
+  let statusLabel;
+  if (isTodayArrival) statusLabel = "Arriving today";
+  else if (dateFiltered && activeStay) statusLabel = room.isExtra ? "Extra · occupied" : "Occupied";
+  else if (dateFiltered && stay?.checkOutDate === selectedDate) statusLabel = "Checking out";
+  else if (dateFiltered && stay) statusLabel = room.isExtra ? "Extra · booked" : "Booked";
+  else if (assignmentOverride && !activeStay && assignmentOverride.checkOutDate === today) statusLabel = "Checking out";
+  else if (activeStay && assignmentOverride?.checkOutDate === today) statusLabel = "Checks out today";
+  else if (activeStay) statusLabel = room.isExtra ? "Extra · occupied" : "Occupied";
+  else if (isUpcoming) statusLabel = "Upcoming";
+  else if (isNotOpen) statusLabel = `Opens ${formatDate(room.availableFrom)}`;
+  else statusLabel = room.isExtra ? "Extra" : "Available";
+
+  const classes = ["room-card", activeStay || dateFiltered && stay && !isUpcoming ? "occupied" : "", isUpcoming ? "upcoming" : "", isNotOpen ? "not-open" : "", room.isExtra ? "extra" : ""].filter(Boolean).join(" ");
+  return `<button class="${classes}" type="button" data-room="${escapeHtml(room.id)}" ${dateFiltered ? `data-date-filtered="true" data-selected-date="${escapeHtml(selectedDate)}"` : ""} ${stay?.stayId ? `data-stay-id="${escapeHtml(stay.stayId)}"` : ""} aria-label="Room ${escapeHtml(room.roomNumber)} at ${escapeHtml(hotel?.name || "hotel")}: ${stay ? `${escapeHtml(stay.headGuest)}, ${stay.guestCount} people` : statusLabel}">
     <span class="room-card-top"><span class="room-number">Room ${escapeHtml(room.roomNumber)}</span><span class="room-state">${statusLabel}</span></span>
-    ${stay ? `<span class="room-guest">${escapeHtml(stay.headGuest)}</span><span class="room-meta"><strong>${Number(stay.guestCount)} ${Number(stay.guestCount) === 1 ? "person" : "people"}</strong> ${isUpcoming ? "booked" : isTodayArrival ? "arriving today" : "in this room"}</span>
+    ${stay ? `<span class="room-guest">${escapeHtml(stay.headGuest)}</span><span class="room-meta"><strong>${Number(stay.guestCount)} ${Number(stay.guestCount) === 1 ? "person" : "people"}</strong> ${isUpcoming || dateFiltered ? "booked" : isTodayArrival ? "arriving today" : "in this room"}</span>
       <span class="room-card-footer"><span>${formatDate(stay.checkInDate)} – ${formatDate(stay.checkOutDate)}</span>${stay.documentId || stay.documentUrl ? '<span class="document-mark" aria-label="Guest document linked">▧ Doc</span>' : ""}</span>`
       : `<span class="room-guest" style="color:#85878b;font-weight:500">${isNotOpen ? "Not available yet" : "Ready for a stay"}</span><span class="room-meta">${isNotOpen ? `Available from ${formatDate(room.availableFrom)}` : room.isExtra ? "Special / additional room" : "No current guests"}</span>`}
   </button>`;
@@ -727,10 +751,10 @@ function setItinerarySegments(segments) {
   if (segments.length === 0) addItinerarySegment();
 }
 
-function openStayDialog(roomId, stayId = "") {
+function openStayDialog(roomId, stayId = "", selectedDate = "") {
   const form = byId("stay-form");
   form.reset();
-  setItinerarySegments([]);
+  setItinerarySegments(selectedDate ? [{ roomId, checkInDate: selectedDate }] : []);
   byId("stay-error").textContent = "";
   byId("existing-document-hint").textContent = "";
   byId("open-document-link").classList.add("hidden");

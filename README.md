@@ -8,7 +8,7 @@ Open `index.html` in a modern desktop browser to preview the app. No package ins
 
 The hotels are **Krati Resort**, **Jass Grand**, and **Maantra**. Use **Bulk add rooms** in the navigation to paste room numbers (one per line or comma-separated); existing numbers are skipped. You can also add a room individually.
 
-The overview has **All rooms** and **Today** views, plus guest search. Select an occupied or upcoming room (or a search result) to view the guest and itinerary details; use **Edit stay** to change them. Google Drive links open in Drive in a new tab rather than downloading through Stayboard. A guest group can have an ordered itinerary with different rooms or hotels for each date range. Add another itinerary segment whenever the group changes rooms or hotels; the app checks room conflicts and date order.
+The overview has **All rooms** and **Booked on date** views, a separate date filter for each hotel, and prominent guest search. Choose a hotel date to see rooms available by then and their bookings for that date. Select an occupied or upcoming room (or a search result) to view the guest and itinerary details; use **Edit stay** to change them. Google Drive links open in Drive in a new tab rather than downloading through Stayboard. A guest group can have an ordered itinerary with different rooms or hotels for each date range. Add another itinerary segment whenever the group changes rooms or hotels; the app checks room conflicts and date order.
 
 The dashboard statistics show totals across all hotels in Overview and only the selected hotel's counts in a hotel view. Date fields use the browser's native date picker.
 
@@ -26,6 +26,8 @@ The website is hosted on Vercel. Apps Script is used only as a private Sheets ba
 2. In **Project Settings → Script properties**, add `STAYBOARD_API_KEY` with a long, unique secret. You will enter the same value as a Vercel environment variable; do not put it in this repository.
 3. If the Sheet is new and empty, run `initializeStayboard` once. If it is already initialized, keep its existing data. The updated script appends `firstCheckInAt` and `firstCheckOutAt` to `Stays` when needed and backfills those columns from existing first itinerary segments. They contain actual date-time cells.
 4. Choose **Deploy → Manage deployments → Edit**, select **New version**, and deploy as a web app that **executes as you** and is accessible to **Anyone**. Vercel sends requests only after Google sign-in and allowlist checks, and Apps Script rejects requests without the server-side API key. The `/exec` URL responds with an API status message, not a website.
+
+To replace the Stayboard data with the confirmed inventory, add [`resetStayboardAndCreateConfirmedInventory`](./apps-script/Code.gs) to the existing Apps Script project, save, then select and run that function in the Apps Script editor. It clears and rebuilds only the `Hotels`, `Rooms`, and `Stays` tabs: Krati Resort (no rooms), Jass Grand (rooms 1–14), Maantra (rooms 1–20), and no stays. It ignores the dates previously listed and leaves any unrelated spreadsheet tabs unchanged. This one-time editor function does not require redeploying the web app.
 
 ### Configure Google sign-in and Vercel
 
