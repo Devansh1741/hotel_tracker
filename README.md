@@ -48,6 +48,8 @@ Setting `ALLOWED_EMAILS` to `*` means any verified Google account can read and m
 
 The Apps Script backend reads and writes booking details and Google Drive links in the shared Google Sheet. The Vercel API checks Google sign-in and either the configured allowlist or the `*` all-Google-accounts setting before forwarding requests. The standalone local preview keeps data in that browser's local storage and does not sync. The app does not upload documents: upload each file to Google Drive yourself, then paste its HTTPS Drive or Docs link into the stay. The Drive file's own sharing permissions control who can open it. For sensitive identity documents, keep sharing restricted to the intended accounts.
 
+Every non-empty row in `Stays` needs a unique stay ID in column A. Fully blank rows are ignored, but check for blank or duplicate IDs if a save reports a stay ID error.
+
 The room status **Extra** is a manual label for a special or additional room. Older browser-stored attachments without a Google Drive URL cannot be opened from the app; add a Drive link to the stay to view the document there.
 
 ## Information needed to finish setup

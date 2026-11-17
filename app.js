@@ -1173,7 +1173,20 @@ byId("stay-form").addEventListener("submit", async (event) => {
     return;
   }
 
+  const seenStayIds = new Set();
+  for (const stay of state.data.stays) {
+    if (!stay.id || seenStayIds.has(stay.id)) {
+      error.textContent = `Another booking has a blank or duplicate ID${stay.id ? ` "${stay.id}"` : ""}. Check column A of the Stays tab before saving.`;
+      return;
+    }
+    seenStayIds.add(stay.id);
+  }
+
   const existing = state.data.stays.find((stay) => stay.id === stayId);
+  if (stayId && !existing) {
+    error.textContent = "This booking could not be matched to its saved record. Reload the page and try again.";
+    return;
+  }
   const documentId = existing?.documentId || "";
   const documentName = existing?.documentName || "";
   const documentUrl = form.elements.documentUrl.value.trim();

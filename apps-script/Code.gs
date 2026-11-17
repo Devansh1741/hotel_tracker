@@ -295,7 +295,10 @@ function readData_() {
 function readRows_(sheet) {
   if (sheet.getLastRow() < 2) return [];
   return sheet.getRange(2, 1, sheet.getLastRow() - 1, TABLES[sheet.getName()].length)
-    .getDisplayValues();
+    .getDisplayValues()
+    .filter(function (row) {
+      return row.some(function (value) { return String(value).trim() !== ""; });
+    });
 }
 
 function writeData_(sheets, data) {
@@ -409,9 +412,19 @@ function validateData_(data) {
 
   const assignments = [];
   const stayIds = new Set();
-  for (const stay of data.stays) {
-    if (!stay || !stay.id || stayIds.has(stay.id) || !String(stay.headGuest || "").trim()) {
-      return "Every stay needs a unique ID and a head guest name.";
+  for (const [index, stay] of data.stays.entries()) {
+    const rowDescription = `Stay ${index + 1}${stay?.headGuest ? ` (${stay.headGuest})` : ""}`;
+    if (!stay || typeof stay !== "object") {
+      return `${rowDescription} is not a valid stay record.`;
+    }
+    if (!String(stay.id || "").trim()) {
+      return `${rowDescription} is missing its ID. Check column A of the Stays tab.`;
+    }
+    if (stayIds.has(stay.id)) {
+      return `${rowDescription} has duplicate ID "${stay.id}". IDs in column A of the Stays tab must be unique.`;
+    }
+    if (!String(stay.headGuest || "").trim()) {
+      return `${rowDescription} is missing the head guest name.`;
     }
     stayIds.add(stay.id);
     const guestCount = Number(stay.guestCount);
