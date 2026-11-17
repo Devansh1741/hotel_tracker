@@ -16,6 +16,7 @@ const state = {
   overviewTab: "all",
   searchQuery: "",
   hotelDates: {},
+  roomDataHotel: "",
   collapsedHotels: new Set(),
   toastTimer: null
 };
@@ -338,6 +339,9 @@ function renderNav() {
     }).join("")}
     <button class="nav-item ${state.currentPage === "bulk" ? "active" : ""}" type="button" data-page="bulk">
       <span class="nav-symbol">＋</span><span>Bulk add rooms</span>
+    </button>
+    <button class="nav-item ${state.currentPage === "manageRooms" ? "active" : ""}" type="button" data-page="manage-rooms">
+      <span class="nav-symbol">▤</span><span>Update room data</span>
     </button>`;
   hotelNav.querySelectorAll("[data-hotel]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -348,6 +352,10 @@ function renderNav() {
   });
   hotelNav.querySelector("[data-page='bulk']").addEventListener("click", () => {
     state.currentPage = "bulk";
+    render();
+  });
+  hotelNav.querySelector("[data-page='manage-rooms']").addEventListener("click", () => {
+    state.currentPage = "manageRooms";
     render();
   });
 }
@@ -380,10 +388,11 @@ function renderDashboard() {
     ? "Manage rooms, stays, and guest details for this hotel."
     : "Here’s what’s happening across your hotels.";
   byId("rooms-title").textContent = selected ? "Rooms" : "Your hotels";
+  const selectedDate = selected ? state.hotelDates[selected.id] || "" : "";
   byId("rooms-caption").textContent = selected
-    ? "Choose a date to view this hotel's rooms and bookings."
+    ? selectedDate ? `Showing room status for ${formatDate(selectedDate)}.` : "Choose a date to filter this hotel's room status."
     : state.overviewTab === "today"
-      ? "Rooms booked on each hotel's selected date."
+      ? "Rooms booked on each hotel's selected date, or across all dates."
       : "Select a hotel to view its rooms and guests.";
   byId("all-rooms-tab").classList.toggle("active", state.overviewTab === "all");
   byId("today-tab").classList.toggle("active", state.overviewTab === "today");
@@ -392,11 +401,13 @@ function renderDashboard() {
 
 function renderPage() {
   const isBulkPage = state.currentPage === "bulk";
+  const isRoomDataPage = state.currentPage === "manageRooms";
   byId("bulk-page").classList.toggle("hidden", !isBulkPage);
-  byId("stats-grid").classList.toggle("hidden", isBulkPage);
-  byId("rooms-section").classList.toggle("hidden", isBulkPage);
-  byId("add-stay-button").classList.toggle("hidden", isBulkPage);
-  byId("add-room-button").classList.toggle("hidden", isBulkPage);
+  byId("room-data-page").classList.toggle("hidden", !isRoomDataPage);
+  byId("stats-grid").classList.toggle("hidden", isBulkPage || isRoomDataPage);
+  byId("rooms-section").classList.toggle("hidden", isBulkPage || isRoomDataPage);
+  byId("add-stay-button").classList.toggle("hidden", isBulkPage || isRoomDataPage);
+  byId("add-room-button").classList.toggle("hidden", isBulkPage || isRoomDataPage);
   if (isBulkPage) {
     byId("page-crumb").textContent = "Bulk add rooms";
     byId("heading-eyebrow").textContent = "PROPERTY SETUP";
@@ -408,6 +419,12 @@ function renderPage() {
       `<option value="${escapeHtml(hotel.id)}">${escapeHtml(hotel.name)}</option>`
     ).join("");
     if (hotelById(selectedHotelId)) select.value = selectedHotelId;
+  } else if (isRoomDataPage) {
+    byId("page-crumb").textContent = "Update room data";
+    byId("heading-eyebrow").textContent = "ROOM MANAGEMENT";
+    byId("page-title").textContent = "Update room data";
+    byId("page-subtitle").textContent = "Edit existing room details and availability.";
+    renderRoomManagement();
   }
 }
 
@@ -426,13 +443,16 @@ function renderHotels() {
   const hotels = state.selectedHotel === "all"
     ? state.data.hotels
     : state.data.hotels.filter((hotel) => hotel.id === state.selectedHotel);
-  const defaultDate = dateKey(new Date());
   const visibleHotels = hotels.map((hotel) => {
     const hotelRooms = state.data.rooms.filter((room) => room.hotelId === hotel.id);
-    const selectedDate = state.hotelDates[hotel.id] || defaultDate;
-    const availableRooms = hotelRooms.filter((room) => roomAvailableOn(room, selectedDate));
+    const selectedDate = state.hotelDates[hotel.id] || "";
+    const availableRooms = selectedDate
+      ? hotelRooms.filter((room) => roomAvailableOn(room, selectedDate))
+      : hotelRooms;
     const rooms = state.overviewTab === "today"
-      ? availableRooms.filter((room) => assignmentOnDate(room.id, selectedDate))
+      ? availableRooms.filter((room) => selectedDate
+        ? assignmentOnDate(room.id, selectedDate)
+        : roomAssignments().some((assignment) => assignment.roomId === room.id))
       : availableRooms;
     return { hotel, rooms, totalRooms: hotelRooms.length, selectedDate };
   });
@@ -450,29 +470,52 @@ function renderHotels() {
             : `${rooms.length} ${rooms.length === 1 ? "room" : "rooms"}`}</p></div>
         </div>
         <div class="hotel-panel-actions">
-          <label class="hotel-date-filter">Date
+          <div class="hotel-date-filter">
+            <span>Date</span>
             <input type="date" value="${escapeHtml(selectedDate)}" data-hotel-date="${escapeHtml(hotel.id)}" aria-label="Filter ${escapeHtml(hotel.name)} by date">
-          </label>
-          <button class="text-button hotel-collapse" type="button" data-toggle-hotel="${escapeHtml(hotel.id)}"
-            aria-expanded="${!collapsed}" aria-controls="${escapeHtml(panelId)}">${collapsed ? "Expand" : "Collapse"}</button>
-          <button class="text-button" type="button" data-rename-hotel="${escapeHtml(hotel.id)}">Rename</button>
-          <button class="text-button" type="button" data-add-room="${escapeHtml(hotel.id)}">+ Add room</button>
+            <button class="clear-hotel-date" type="button" data-clear-hotel-date="${escapeHtml(hotel.id)}" aria-label="Clear ${escapeHtml(hotel.name)} date filter" ${selectedDate ? "" : "disabled"}>×</button>
+          </div>
+          <button class="hotel-action-button hotel-collapse ${collapsed ? "is-collapsed" : ""}" type="button" data-toggle-hotel="${escapeHtml(hotel.id)}"
+            aria-label="${collapsed ? "Expand" : "Collapse"} ${escapeHtml(hotel.name)} rooms" title="${collapsed ? "Expand rooms" : "Collapse rooms"}"
+            aria-expanded="${!collapsed}" aria-controls="${escapeHtml(panelId)}">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <button class="hotel-action-button" type="button" data-rename-hotel="${escapeHtml(hotel.id)}"
+            aria-label="Rename ${escapeHtml(hotel.name)}" title="Rename hotel">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>
+          </button>
+          <button class="hotel-action-button" type="button" data-add-room="${escapeHtml(hotel.id)}"
+            aria-label="Add room to ${escapeHtml(hotel.name)}" title="Add room">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+          </button>
         </div>
       </header>
       <div class="hotel-panel-content ${collapsed ? "hidden" : ""}" id="${escapeHtml(panelId)}">
         ${rooms.length ? `<div class="room-grid">${rooms.map((room) => {
-          const assignment = assignmentOnDate(room.id, selectedDate);
-          return renderRoom(room, assignment, selectedDate, true);
+          const assignment = selectedDate
+            ? assignmentOnDate(room.id, selectedDate)
+            : state.overviewTab === "today"
+              ? assignmentAcrossDates(room.id)
+              : null;
+          return renderRoom(room, assignment, selectedDate, Boolean(selectedDate));
         }).join("")}</div>` : `
           <div class="empty-hotel"><div><strong>${state.overviewTab === "today" ? "No bookings on this date" : "No rooms available on this date"}</strong><p>${state.overviewTab === "today" ? "Try another date or view all rooms." : "Choose another date or add rooms to this hotel."}</p></div>
-            ${state.overviewTab === "today" ? "" : `<button class="button button-secondary" type="button" data-add-room="${escapeHtml(hotel.id)}">+ Add a room</button>`}</div>`}
+            ${state.overviewTab === "today" ? "" : `<button class="hotel-action-button empty-hotel-add" type="button" data-add-room="${escapeHtml(hotel.id)}" aria-label="Add room to ${escapeHtml(hotel.name)}" title="Add room"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg></button>`}</div>`}
       </div>
     </article>`;
   }).join("");
 
   hotelContent.querySelectorAll("[data-hotel-date]").forEach((input) => {
     input.addEventListener("change", () => {
-      state.hotelDates[input.dataset.hotelDate] = input.value || defaultDate;
+      state.hotelDates[input.dataset.hotelDate] = input.value;
+      renderDashboard();
+      renderHotels();
+    });
+  });
+  hotelContent.querySelectorAll("[data-clear-hotel-date]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.hotelDates[button.dataset.clearHotelDate] = "";
+      renderDashboard();
       renderHotels();
     });
   });
@@ -533,6 +576,47 @@ function assignmentOnDate(roomId, date) {
   )[0] || null;
 }
 
+function assignmentAcrossDates(roomId) {
+  const assignments = roomAssignments()
+    .filter((assignment) => assignment.roomId === roomId)
+    .sort((a, b) =>
+      localDateTime(a.checkInDate, a.checkInTime) - localDateTime(b.checkInDate, b.checkInTime)
+    );
+  const now = new Date();
+  return assignments.find((assignment) =>
+    localDateTime(assignment.checkInDate, assignment.checkInTime) <= now &&
+    localDateTime(assignment.checkOutDate, assignment.checkOutTime) > now
+  ) || assignments.find((assignment) =>
+    localDateTime(assignment.checkOutDate, assignment.checkOutTime) > now
+  ) || assignments[assignments.length - 1] || null;
+}
+
+function renderRoomManagement() {
+  const hotelSelect = byId("room-data-hotel");
+  const selectedHotelId = state.roomDataHotel ||
+    (state.selectedHotel !== "all" ? state.selectedHotel : "");
+  hotelSelect.innerHTML = `<option value="">All hotels</option>${state.data.hotels.map((hotel) =>
+    `<option value="${escapeHtml(hotel.id)}">${escapeHtml(hotel.name)}</option>`
+  ).join("")}`;
+  if (hotelById(selectedHotelId)) hotelSelect.value = selectedHotelId;
+
+  const rooms = state.data.rooms
+    .filter((room) => !hotelSelect.value || room.hotelId === hotelSelect.value)
+    .sort((a, b) => {
+      const hotelOrder = hotelById(a.hotelId).name.localeCompare(hotelById(b.hotelId).name);
+      return hotelOrder || a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true });
+    });
+  byId("room-data-count").textContent = `${rooms.length} ${rooms.length === 1 ? "room" : "rooms"}`;
+  byId("room-data-error").textContent = "";
+  byId("room-data-rows").innerHTML = rooms.map((room) => `
+    <tr data-room-row="${escapeHtml(room.id)}">
+      <td>${hotelSelect.value ? "" : `<span class="room-data-hotel-name">${escapeHtml(hotelById(room.hotelId).name)}</span>`}
+        <input name="roomNumber" aria-label="Room number${hotelSelect.value ? "" : ` at ${escapeHtml(hotelById(room.hotelId).name)}`}" value="${escapeHtml(room.roomNumber)}" required></td>
+      <td><input name="availableFrom" type="date" aria-label="Available from for room ${escapeHtml(room.roomNumber)}" value="${escapeHtml(room.availableFrom || "")}"></td>
+      <td><input name="isExtra" type="checkbox" aria-label="Mark room ${escapeHtml(room.roomNumber)} as extra" ${room.isExtra ? "checked" : ""}></td>
+    </tr>`).join("") || `<tr><td class="room-data-empty" colspan="3">No rooms in this hotel yet.</td></tr>`;
+}
+
 function renderSearchResults(query) {
   const matches = state.data.stays.filter((stay) => {
     const groupNames = [stay.headGuest, ...(stay.otherGuests || "").split(/[,;\n]/)]
@@ -575,13 +659,13 @@ function renderRoom(room, assignmentOverride = null, selectedDate = dateKey(new 
   const hotel = hotelById(room.hotelId);
   const today = dateKey(new Date());
   const activeStay = !dateFiltered || selectedDate === today ? currentStay(room.id) : null;
-  const stay = dateFiltered ? assignmentOverride : activeStay || roomAssignments()
+  const stay = dateFiltered ? assignmentOverride : activeStay || assignmentOverride || roomAssignments()
     .filter((entry) => entry.roomId === room.id && localDateTime(entry.checkInDate, entry.checkInTime) > new Date())
     .sort((a, b) => localDateTime(a.checkInDate, a.checkInTime) - localDateTime(b.checkInDate, b.checkInTime))[0];
   const isUpcoming = dateFiltered
     ? Boolean(stay && !activeStay && stay.checkInDate === selectedDate &&
       (selectedDate > today || localDateTime(stay.checkInDate, stay.checkInTime) > new Date()))
-    : Boolean(stay && !activeStay);
+    : Boolean(stay && !activeStay && !assignmentOverride);
   const isTodayArrival = Boolean(dateFiltered
     ? stay && selectedDate === today && !activeStay && stay.checkInDate === today
     : assignmentOverride && !activeStay && assignmentOverride.checkInDate === today);
@@ -591,14 +675,14 @@ function renderRoom(room, assignmentOverride = null, selectedDate = dateKey(new 
   else if (dateFiltered && activeStay) statusLabel = room.isExtra ? "Extra · occupied" : "Occupied";
   else if (dateFiltered && stay?.checkOutDate === selectedDate) statusLabel = "Checking out";
   else if (dateFiltered && stay) statusLabel = room.isExtra ? "Extra · booked" : "Booked";
-  else if (assignmentOverride && !activeStay && assignmentOverride.checkOutDate === today) statusLabel = "Checking out";
+  else if (assignmentOverride) statusLabel = room.isExtra ? "Extra · booked" : "Booked";
   else if (activeStay && assignmentOverride?.checkOutDate === today) statusLabel = "Checks out today";
   else if (activeStay) statusLabel = room.isExtra ? "Extra · occupied" : "Occupied";
   else if (isUpcoming) statusLabel = "Upcoming";
   else if (isNotOpen) statusLabel = `Opens ${formatDate(room.availableFrom)}`;
   else statusLabel = room.isExtra ? "Extra" : "Available";
 
-  const classes = ["room-card", activeStay || dateFiltered && stay && !isUpcoming ? "occupied" : "", isUpcoming ? "upcoming" : "", isNotOpen ? "not-open" : "", room.isExtra ? "extra" : ""].filter(Boolean).join(" ");
+  const classes = ["room-card", activeStay || assignmentOverride || dateFiltered && stay && !isUpcoming ? "occupied" : "", isUpcoming ? "upcoming" : "", isNotOpen ? "not-open" : "", room.isExtra ? "extra" : ""].filter(Boolean).join(" ");
   return `<button class="${classes}" type="button" data-room="${escapeHtml(room.id)}" ${dateFiltered ? `data-date-filtered="true" data-selected-date="${escapeHtml(selectedDate)}"` : ""} ${stay?.stayId ? `data-stay-id="${escapeHtml(stay.stayId)}"` : ""} aria-label="Room ${escapeHtml(room.roomNumber)} at ${escapeHtml(hotel?.name || "hotel")}: ${stay ? `${escapeHtml(stay.headGuest)}, ${stay.guestCount} people` : statusLabel}">
     <span class="room-card-top"><span class="room-number">Room ${escapeHtml(room.roomNumber)}</span><span class="room-state">${statusLabel}</span></span>
     ${stay ? `<span class="room-guest">${escapeHtml(stay.headGuest)}</span><span class="room-meta"><strong>${Number(stay.guestCount)} ${Number(stay.guestCount) === 1 ? "person" : "people"}</strong> ${isUpcoming || dateFiltered ? "booked" : isTodayArrival ? "arriving today" : "in this room"}</span>
@@ -949,6 +1033,64 @@ byId("bulk-room-form").addEventListener("submit", async (event) => {
   const skippedMessage = skippedCount ? ` Skipped ${skippedCount} duplicate ${skippedCount === 1 ? "number" : "numbers"}.` : "";
   result.textContent = `Added ${addedRooms.length} ${addedRooms.length === 1 ? "room" : "rooms"} to ${hotelById(hotelId).name}.${skippedMessage}`;
   showToast(`${addedRooms.length} ${addedRooms.length === 1 ? "room" : "rooms"} added.`);
+});
+
+byId("room-data-hotel").addEventListener("change", (event) => {
+  state.roomDataHotel = event.currentTarget.value;
+  renderRoomManagement();
+});
+byId("room-data-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const error = byId("room-data-error");
+  error.textContent = "";
+  const rows = [...byId("room-data-rows").querySelectorAll("[data-room-row]")];
+  if (rows.length === 0) {
+    error.textContent = "There are no rooms to update.";
+    return;
+  }
+  const updates = rows.map((row) => {
+    const room = roomById(row.dataset.roomRow);
+    return {
+      room,
+      roomNumber: row.querySelector('[name="roomNumber"]').value.trim(),
+      availableFrom: row.querySelector('[name="availableFrom"]').value,
+      isExtra: row.querySelector('[name="isExtra"]').checked
+    };
+  });
+  if (updates.some((update) => !update.roomNumber)) {
+    error.textContent = "Every room must have a room number.";
+    return;
+  }
+
+  const roomNumbers = new Set();
+  for (const update of updates) {
+    const key = `${update.room.hotelId}|${update.roomNumber.toLocaleLowerCase()}`;
+    if (roomNumbers.has(key)) {
+      error.textContent = `Room ${update.roomNumber} is listed more than once for the same hotel.`;
+      return;
+    }
+    roomNumbers.add(key);
+    if (update.availableFrom && roomAssignments().some((assignment) =>
+      assignment.roomId === update.room.id && assignment.checkInDate < update.availableFrom
+    )) {
+      error.textContent = `Room ${update.roomNumber} has a booking before its available-from date.`;
+      return;
+    }
+  }
+
+  const previousRooms = structuredClone(state.data.rooms);
+  for (const update of updates) {
+    update.room.roomNumber = update.roomNumber;
+    update.room.availableFrom = update.availableFrom;
+    update.room.isExtra = update.isExtra;
+  }
+  if (!await saveData()) {
+    state.data.rooms = previousRooms;
+    render();
+    return;
+  }
+  render();
+  showToast("Room data updated.");
 });
 
 byId("hotel-form").addEventListener("submit", async (event) => {

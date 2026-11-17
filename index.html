@@ -88,7 +88,7 @@
             <div class="overview-controls">
               <div class="overview-tabs" role="group" aria-label="Overview period">
                 <button class="overview-tab active" id="all-rooms-tab" type="button">All rooms</button>
-                <button class="overview-tab" id="today-tab" type="button">Booked on date</button>
+                <button class="overview-tab" id="today-tab" type="button">Booked rooms</button>
               </div>
               <label class="search-field">
                 <span aria-hidden="true">⌕</span>
@@ -127,6 +127,30 @@
               </div>
               <div class="form-error" id="bulk-error" role="alert"></div>
               <div class="bulk-result" id="bulk-result" role="status" aria-live="polite"></div>
+            </form>
+          </div>
+        </section>
+
+        <section class="bulk-page hidden" id="room-data-page">
+          <div class="bulk-card">
+            <p class="eyebrow">ROOM MANAGEMENT</p>
+            <h2>Update room data</h2>
+            <p class="bulk-description">Edit room numbers, availability dates, and Extra status. Room IDs stay the same, so existing bookings remain linked.</p>
+            <label class="field room-data-hotel">Hotel
+              <select id="room-data-hotel"></select>
+            </label>
+            <form id="room-data-form">
+              <div class="room-data-table-wrap">
+                <table class="room-data-table">
+                  <thead><tr><th>Room</th><th>Available from</th><th>Extra</th></tr></thead>
+                  <tbody id="room-data-rows"></tbody>
+                </table>
+              </div>
+              <div class="form-error" id="room-data-error" role="alert"></div>
+              <div class="bulk-footer">
+                <span class="bulk-count" id="room-data-count"></span>
+                <button class="button button-primary" type="submit">Save room changes</button>
+              </div>
             </form>
           </div>
         </section>
